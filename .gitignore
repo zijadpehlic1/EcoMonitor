@@ -1,0 +1,37 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/*.db
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Local configuration
+backend/.env
+frontend/.env
+.idea/
+.vscode/
+*.log
+
+.pytest_cache/
+__pycache__/
+.venv/
+venv/
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+backend/audit-*.json
+backend/source-verification.json
