@@ -128,6 +128,13 @@ def _generate(db, location, horizon, source, station_id):
         if cache_key in _cache:
             return _cache[cache_key]
 
+    from app.services import model_store
+    artifact_key = model_store.artifact_key(location, source, station_id, 'base')
+    training_data = model_store.snapshot(timestamps, values)
+    saved = model_store.reusable(db, artifact_key, training_data, MLForecastResponse)
+    if saved:
+        return model_store.base_prediction(*saved, values, timestamps, horizon)
+
     features: list[list[float]] = []
     targets: list[float] = []
     target_times: list[datetime] = []
@@ -157,7 +164,7 @@ def _generate(db, location, horizon, source, station_id):
         max_depth=12,
         min_samples_leaf=3,
         random_state=42,
-        n_jobs=-1,
+        n_jobs=1,
     )
     model.fit(x[:split], y[:split])
     # Recursive evaluation performs many small predictions; one worker avoids
@@ -203,7 +210,7 @@ def _generate(db, location, horizon, source, station_id):
     baseline_mae, baseline_rmse = _error_metrics(evaluated_actuals, evaluated_baseline)
     improvement = ((baseline_mae - mae) / baseline_mae * 100) if baseline_mae else 0.0
 
-    model.n_jobs = -1
+    model.n_jobs = 1
     model.fit(x, y)
     model.n_jobs = 1
     final_predictions = (_recursive_forecast(model, values, latest_stamp, horizon)
@@ -243,6 +250,7 @@ def _generate(db, location, horizon, source, station_id):
         forecast=forecast_points,
         generated_at=datetime.now(UTC),
     )
+    model_store.save(db, artifact_key, training_data, model, response)
     with _cache_lock:
         if len(_cache) >= 16:
             _cache.pop(next(iter(_cache)))

@@ -22,12 +22,12 @@ from app.schemas import (
 from app.services.air_quality import ensure_supported_locations, synchronize_location
 from app.services.dashboard import build_dashboard
 from app.services.history import build_historical_series
-from app.services.ml_forecast import generate_pm25_forecast
+from app.services.jobs import cached_model_response, enqueue
 from app.services.datasets import resolve_station
 from app.services.sensor_history import synchronize_sensor_history
 from app.services.air_quality import aware_utc
 from app.services.weather import build_weather_dashboard, synchronize_weather
-from app.services.weather_ml import generate_weather_model_comparison
+from app.models import BackgroundJob, DataCoverage
 from app.services.sensor_measurements import (
     build_sensor_coverage,
     build_sensor_current,
@@ -103,16 +103,11 @@ async def refresh(
     force: bool = False,
     db: Session = Depends(get_db),
 ) -> RefreshResponse:
-    result = await synchronize_location(db, resolve_location(db, location), force=force)
-    if result.status == "failed":
-        raise HTTPException(status_code=503, detail=result.message)
-    return RefreshResponse(
-        status=result.status,
-        received=result.received,
-        inserted=result.inserted,
-        updated=result.updated,
-        message=result.message,
-    )
+    selected = resolve_location(db, location)
+    queued = enqueue(db, f'sync:{selected.slug}', 'sync', {'city': selected.slug, 'days': 90}, -10)
+    return RefreshResponse(status='queued' if queued else 'cached', received=0, inserted=0, updated=0,
+        message='Osvježavanje je zakazano u pozadini.' if queued else 'Provjera je već zakazana ili je predmemorija još svježa.')
+
 
 
 @router.get("/forecast/pm25", response_model=MLForecastResponse)
@@ -125,7 +120,7 @@ def pm25_forecast(
 ) -> MLForecastResponse:
     selected = resolve_location(db, location)
     validate_dataset(db, selected, source, station_id)
-    return generate_pm25_forecast(db, selected, horizon, source, station_id)
+    return cached_model_response(db, selected, horizon, source, station_id, 'base')
 
 
 @router.get("/weather", response_model=WeatherDashboardResponse)
@@ -136,24 +131,33 @@ def weather(
     return build_weather_dashboard(db, resolve_location(db, location))
 
 
+@router.post('/forecast/retrain')
+def retrain(location: str = 'zenica', source: str = Query(default='modeled', pattern='^(modeled|sensor)$'),
+    station_id: int | None = None, db: Session = Depends(get_db)):
+    from sqlalchemy import update
+    from app.services.jobs import model_key
+    from app.services.air_quality import utc_now
+    selected = resolve_location(db, location)
+    validate_dataset(db, selected, source, station_id)
+    for model in ('base', 'weather'):
+        key = model_key(location, source, station_id, model, 24)
+        db.execute(update(BackgroundJob).where(BackgroundJob.key == key, BackgroundJob.status == 'done')
+            .values(available_at=utc_now(), completed_at=None))
+        db.commit()
+        enqueue(db, key, 'ml', dict(city=location, source=source, station_id=station_id, model=model, horizon=24, retrain=True), 90)
+    return {'status': 'queued', 'message': 'Ponovno treniranje je zatraženo; postojeći rezultati ostaju dostupni.'}
+
+
 @router.post("/weather/refresh", response_model=WeatherRefreshResponse)
 async def weather_refresh(
     location: str = "zenica",
     force: bool = False,
     db: Session = Depends(get_db),
 ) -> WeatherRefreshResponse:
-    result = await synchronize_weather(db, resolve_location(db, location), force=force)
-    if result.status == "failed":
-        raise HTTPException(status_code=503, detail=result.message)
-    return WeatherRefreshResponse(
-        status=result.status,
-        live_status=result.live_status,
-        historical_status=result.historical_status,
-        archive_status=result.archive_status,
-        inserted=result.inserted,
-        updated=result.updated,
-        message=result.message,
-    )
+    result = await refresh(location, force, db)
+    return WeatherRefreshResponse(status=result.status, live_status=result.status,
+        historical_status=result.status, archive_status=result.status, inserted=0, updated=0, message=result.message)
+
 
 
 @router.get(
@@ -169,7 +173,7 @@ def pm25_weather_comparison(
 ) -> WeatherModelComparisonResponse:
     selected = resolve_location(db, location)
     validate_dataset(db, selected, source, station_id)
-    return generate_weather_model_comparison(db, selected, horizon, source, station_id)
+    return cached_model_response(db, selected, horizon, source, station_id, 'weather')
 
 
 @router.get("/sensors/stations")
@@ -187,8 +191,15 @@ def sensor_stations(location: str = "zenica", db: Session = Depends(get_db)):
         if meta.get("licenses"):
             attribution[state.station_id] = f"OpenAQ / {(meta.get('provider') or {}).get('name', '')}; " + "; ".join(
                 f"{lic.get('name', '')}: {(lic.get('attribution') or {}).get('name', '')}" for lic in meta['licenses'])
+    quality = {}
+    for sid, validation, amount in db.execute(select(SensorMeasurement.station_id,
+        SensorMeasurement.validation_status, func.count(SensorMeasurement.id))
+        .where(SensorMeasurement.station_id.in_(attribution))
+        .group_by(SensorMeasurement.station_id, SensorMeasurement.validation_status)):
+        quality.setdefault(sid, {})[validation] = amount
     return [{"id": s.id, "name": s.name, "provider": s.provider, "source_url": s.source_url,
         "attribution": attribution[s.id], "latitude": s.latitude, "longitude": s.longitude,
+        "location": selected.slug, "measurement_type": "physical", "validation_counts": quality.get(s.id, {}),
         "measurement_count": count, "first_measurement_at": aware_utc(first) if first else None,
         "last_measurement_at": aware_utc(last) if last else None} for s, count, first, last in rows]
 
@@ -196,7 +207,10 @@ def sensor_stations(location: str = "zenica", db: Session = Depends(get_db)):
 @router.post("/sensors/history/refresh")
 async def sensor_history_refresh(location: str = "zenica", days: int = Query(default=92, ge=1, le=366),
     force: bool = False, db: Session = Depends(get_db)):
-    return await synchronize_sensor_history(db, resolve_location(db, location), days=days, force=force)
+    selected = resolve_location(db, location)
+    queued = enqueue(db, f'sync-history:{selected.slug}', 'sync', {'city': selected.slug, 'days': days, 'physical_only': True}, -10)
+    return {'status': 'queued' if queued else 'cached', 'message': 'Inkrementalna historija se provjerava u pozadini.'}
+
 
 
 @router.get("/sensors/current", response_model=SensorCurrentResponse)
@@ -219,20 +233,10 @@ async def sensor_refresh(
     force: bool = False,
     db: Session = Depends(get_db),
 ) -> SensorRefreshResponse:
-    result = await synchronize_sensor_location(
-        db,
-        resolve_location(db, location),
-        force=force,
-    )
-    return SensorRefreshResponse(
-        status=result.status,
-        provider=result.provider,
-        station_name=result.station_name,
-        received=result.received,
-        inserted=result.inserted,
-        updated=result.updated,
-        message=result.message,
-    )
+    result = await refresh(location, force, db)
+    return SensorRefreshResponse(status=result.status, provider=None, station_name=None,
+        received=0, inserted=0, updated=0, message=result.message)
+
 
 
 @router.get("/sustainability/metrics")
@@ -303,8 +307,16 @@ def sustainability_metrics(
         or 0
     )
     settings = get_settings()
+    from app.models import ModelArtifact, ModelResult, ModelExecution
+    model_runs = db.scalars(select(ModelExecution).where(ModelExecution.model_key.like(f'ml:{selected.slug}:%'))).all()
     return {
         "location": selected.slug,
+        "persisted_models": db.scalar(select(func.count(ModelArtifact.key)).where(ModelArtifact.key.like(f'{selected.slug}:%'))),
+        "persisted_model_results": db.scalar(select(func.count(ModelResult.key)).where(ModelResult.key.like(f'ml:{selected.slug}:%'))),
+        "recorded_training_runs": sum(r.trained for r in model_runs),
+        "recorded_evaluation_runs": sum(r.evaluated for r in model_runs),
+        "recorded_prediction_computations": sum(r.forecast_recomputed for r in model_runs),
+        "model_execution_note": "Counts start with model_executions instrumentation; older artifacts are not retroactively counted. A training run may fit both evaluation and production forests.",
         "stored_hourly_records": readings,
         "stored_hourly_weather_records": weather_readings,
         "stored_physical_sensor_measurements": sensor_readings,
@@ -332,3 +344,29 @@ def sustainability_metrics(
         ],
     }
 
+
+
+@router.get('/sync/status')
+def sync_status(location: str = 'zenica', db: Session = Depends(get_db)):
+    selected = resolve_location(db, location)
+    job = db.get(BackgroundJob, f'sync:{location}')
+    args = json.loads(job.arguments) if job else {}
+    # Promote only already queued initial work. A city visit never schedules a provider refresh.
+    if job and job.status == 'queued' and args.get('days', 90) < 90 and job.priority >= 0:
+        from sqlalchemy import update
+        db.execute(update(BackgroundJob).where(BackgroundJob.key == job.key).values(priority=-1))
+        db.commit()
+    rows = db.execute(select(DataCoverage.dataset, DataCoverage.status, func.count())
+        .where(DataCoverage.location_id == selected.id).group_by(DataCoverage.dataset, DataCoverage.status)).all()
+    latest_sync = db.scalar(select(func.max(SyncRun.completed_at)).where(SyncRun.location_id == selected.id, SyncRun.status == 'success'))
+    latest_sensor = db.scalar(select(func.max(SensorImportState.completed_at)).join(SensorStation,
+        SensorStation.id == SensorImportState.station_id).where(SensorStation.location_id == selected.id))
+    revision = '|'.join(str(value or '') for value in (latest_sync, latest_sensor))
+    last_result = json.loads(job.result) if job and job.result else {}
+    failed_sources = [name for name, result in last_result.get('sources', {}).items()
+        if isinstance(result, dict) and result.get('status') == 'failed']
+    return {'location': location, 'status': job.status if job else 'idle', 'revision': revision, 'failed_sources': failed_sources,
+        'stage_days': args.get('days', 0), 'completed_at': job.completed_at if job else None,
+        'last_result': json.loads(job.result) if job and job.result else None,
+        'coverage': [{'dataset': dataset, 'status': status, 'checked_days': count} for dataset,status,count in rows],
+        'note': 'Provjereni period nije potvrda potpunih mjerenja; dostupnost sati je prikazana na grafikonu.'}

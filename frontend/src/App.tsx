@@ -19,6 +19,8 @@ import {
   X,
 } from 'lucide-react'
 import { api } from './api'
+import { matchesDataset } from './datasetIdentity'
+import { ProvenancePanel } from './components/ProvenancePanel'
 import { aqiBand } from './aqi'
 import { AirQualityChart, historyControlLabels } from './components/AirQualityChart'
 import { ForecastPanel } from './components/ForecastPanel'
@@ -69,17 +71,22 @@ export default function App() {
 function CityDashboard({ location, setLocation }: { location: string; setLocation: (value: string) => void }) {
   const [locations, setLocations] = useState<Location[]>([])
   const [source, setSource] = useState<'sensor' | 'modeled'>('sensor')
-  const [stations, setStations] = useState<SensorStation[]>([])
-  const [stationId, setStationId] = useState<number | undefined>()
+  const [stations, setStations] = useState<SensorStation[]>(() => api.peek(`/sensors/stations?location=${location}`) ?? [])
+  const [stationId, setStationId] = useState<number | undefined>(() => stations[0]?.id)
+  const selectedQuery = `&source=${source}${source === 'sensor' && stationId ? `&station_id=${stationId}` : ''}`
   const [hours, setHours] = useState(24)
   const [historyGrouping, setHistoryGrouping] = useState<HistoryGrouping>('hourly')
   const [historyAggregation, setHistoryAggregation] = useState<HistoryAggregation>('average')
-  const [dashboard, setDashboard] = useState<DashboardData | null>(null)
-  const [history, setHistory] = useState<HistoricalData | null>(null)
-  const [forecast, setForecast] = useState<ForecastData | null>(null)
-  const [weather, setWeather] = useState<WeatherData | null>(null)
-  const [weatherComparison, setWeatherComparison] = useState<WeatherModelComparison | null>(null)
-  const [sensor, setSensor] = useState<SensorData | null>(null)
+  const [dashboard, setDashboard] = useState<DashboardData | null>(() => api.peek(`/dashboard?location=${location}&hours=24`))
+  const [historyData, setHistory] = useState<HistoricalData | null>(() => api.peek(`/history?location=${location}&hours=24&grouping=hourly&aggregation=average${selectedQuery}`))
+  const [forecastData, setForecast] = useState<ForecastData | null>(() => api.peek(`/forecast/pm25?location=${location}&horizon=24${selectedQuery}`))
+  const [weather, setWeather] = useState<WeatherData | null>(() => api.peek(`/weather?location=${location}`))
+  const [comparisonData, setWeatherComparison] = useState<WeatherModelComparison | null>(() => api.peek(`/forecast/pm25/weather-comparison?location=${location}&horizon=24${selectedQuery}`))
+  const history = historyData?.location.slug === location && historyData.pollution_source.type === source &&
+    (source === 'modeled' || historyData.pollution_source.station_id === String(stationId)) ? historyData : null
+  const forecast = matchesDataset(forecastData, location, source, stationId) ? forecastData : null
+  const weatherComparison = matchesDataset(comparisonData, location, source, stationId) ? comparisonData : null
+  const [sensor, setSensor] = useState<SensorData | null>(() => api.peek(`/sensors/current?location=${location}`))
   const [loading, setLoading] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -123,7 +130,6 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
       if (currentHistory.current === historyKey) setHistory(result)
     } catch (err) {
       if (currentHistory.current !== historyKey) return
-      setHistory(null)
       setHistoryError(err instanceof Error ? err.message : 'Historijske podatke nije moguće učitati.')
     } finally {
       if (currentHistory.current === historyKey) setHistoryLoading(false)
@@ -137,7 +143,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
       const result = await api.forecast(location, 24, source, stationId)
       if (currentDataset.current === datasetKey) setForecast(result)
     } catch {
-      if (currentDataset.current === datasetKey) setForecast(null)
+      if (currentDataset.current === datasetKey) setNotice('Prognozu nije moguće osvježiti; prethodni rezultat ostaje dostupan.')
     } finally {
       if (currentDataset.current === datasetKey) setForecastLoading(false)
     }
@@ -148,7 +154,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
     try {
       setWeather(await api.weather(location))
     } catch {
-      setWeather(null)
+      // Preserve cached weather on a transient failure.
     } finally {
       setWeatherLoading(false)
     }
@@ -161,26 +167,22 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
       const result = await api.weatherComparison(location, 24, source, stationId)
       if (currentDataset.current === datasetKey) setWeatherComparison(result)
     } catch {
-      if (currentDataset.current === datasetKey) setWeatherComparison(null)
+      if (currentDataset.current === datasetKey) setNotice('Poređenje modela nije moguće osvježiti; prethodni rezultat ostaje dostupan.')
     } finally {
       if (currentDataset.current === datasetKey) setComparisonLoading(false)
     }
   }, [location, source, stationId, datasetKey])
 
-  const loadSensor = useCallback(async (allowRefresh = true) => {
+  const loadSensor = useCallback(async (_allowRefresh = false) => {
     setSensorLoading(true)
     try {
-      let result = await api.sensors(location)
-      if (allowRefresh && result.status !== 'live') {
-        await api.refreshSensors(location, false)
-        result = await api.sensors(location)
-      }
+      const result = await api.sensors(location)
       setSensor(result)
       const available = await api.stations(location)
       setStations(available)
       setStationId(previous => previous ?? available[0]?.id)
     } catch {
-      setSensor(null)
+      // Preserve this city's previously fetched values on a transient failure.
     } finally {
       setSensorLoading(false)
     }
@@ -195,12 +197,13 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
   }, [loadDashboard])
 
   useEffect(() => {
-    setHistory(null)
+    const cached = api.peek<HistoricalData>(`/history?location=${location}&hours=${hours}&grouping=${historyGrouping}&aggregation=${historyAggregation}${selectedQuery}`)
+    setHistory(previous => cached ?? (previous?.pollution_source.type === source && (source === 'modeled' || previous?.pollution_source.station_id === String(stationId)) ? previous : null))
     void loadHistory()
   }, [loadHistory])
 
   useEffect(() => {
-    setForecast(null)
+    setForecast(api.peek(`/forecast/pm25?location=${location}&horizon=24${selectedQuery}`))
     void loadForecast()
   }, [loadForecast])
 
@@ -209,7 +212,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
   }, [loadWeather])
 
   useEffect(() => {
-    setWeatherComparison(null)
+    setWeatherComparison(api.peek(`/forecast/pm25/weather-comparison?location=${location}&horizon=24${selectedQuery}`))
     void loadWeatherComparison()
   }, [loadWeatherComparison])
 
@@ -233,26 +236,46 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
     setRefreshing(true)
     setError(null)
     try {
-      const [airResult, weatherResult, sensorResult] = await Promise.allSettled([
-        api.refresh(location, true),
-        api.refreshWeather(location, true),
-        api.refreshSensors(location, true),
-      ])
-      if (airResult.status === 'rejected' && weatherResult.status === 'rejected' && sensorResult.status === 'rejected') {
-        throw new Error('Sinhronizacija podataka nije uspjela.')
-      }
-      setNotice(
-        [airResult, weatherResult, sensorResult].every(result => result.status === 'fulfilled' && ['success', 'cached'].includes(result.value.status))
-          ? 'Podaci o kvalitetu zraka, mjernim stanicama i vremenu su sinhronizirani.'
-          : 'Dio podataka je sinhroniziran; jedan izvor trenutno nije dostupan.',
-      )
-      await Promise.all([loadDashboard(false), loadHistory(false), loadForecast(), loadWeather(false), loadWeatherComparison(), loadSensor(false)])
+      const result = await api.refresh(location, false)
+      setNotice(result.message)
+      // Only this city's responses are expired; values remain visible.
+      api.invalidate(location)
+      await Promise.all([loadDashboard(false), loadHistory(false), loadWeather(false), loadSensor(false)])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Osvježavanje podataka nije uspjelo.')
     } finally {
       setRefreshing(false)
     }
   }
+
+  const [progress, setProgress] = useState<Awaited<ReturnType<typeof api.progress>> | null>(null)
+  const progressRevision = useRef<string | undefined>(api.peek<Awaited<ReturnType<typeof api.progress>>>(`/sync/status?location=${location}`)?.revision)
+  const lastModelPoll = useRef(0)
+  useEffect(() => {
+    let active = true
+    const poll = async () => {
+      try {
+        const result = await api.progress(location)
+        if (!active) return
+        setProgress(result)
+        const changed = progressRevision.current !== undefined && progressRevision.current !== result.revision
+        progressRevision.current = result.revision
+        if (changed) {
+          api.invalidate(location)
+          void loadDashboard(false); void loadHistory(false); void loadWeather(false); void loadSensor(false)
+        }
+        const currentModel = api.peek<ForecastData>(`/forecast/pm25?location=${location}&horizon=24${selectedQuery}`)
+        const currentComparison = api.peek<WeatherModelComparison>(`/forecast/pm25/weather-comparison?location=${location}&horizon=24${selectedQuery}`)
+        if (changed || [currentModel?.computation_status, currentComparison?.computation_status].some(s => s === 'queued' || s === 'running') || Date.now()-lastModelPoll.current > 5*60_000) {
+          lastModelPoll.current = Date.now()
+          void loadForecast(); void loadWeatherComparison()
+        }
+      } catch { /* Already displayed data remains available. */ }
+    }
+    void poll()
+    const timer = window.setInterval(poll, 30_000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [location, loadDashboard, loadHistory, loadWeather, loadSensor, loadForecast, loadWeatherComparison])
 
   const latest = dashboard?.latest ?? null
   const fresh = latest && Date.now() - new Date(latest.measured_at).getTime() <= 3 * 3600_000
@@ -318,6 +341,8 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
             <button onClick={() => setError(null)} aria-label="Zatvori poruku o grešci"><X size={17} /></button>
           </div>
         )}
+        {progress && ['queued', 'running'].includes(progress.status) && <p className="px-1 text-xs text-slate-500" role="status">{progress.stage_days < 90 ? `Učitavanje historijskih podataka: provjera perioda od ${progress.stage_days}/90 dana.` : 'Pozadinska provjera novih podataka.'} Nedostajući sati nisu mjerenja.</p>}
+        {!!progress?.failed_sources?.length && <p className="px-1 text-xs text-amber-700" role="status">Dio izvora trenutno nije dostupan. Prethodni podaci ostaju prikazani; novi pokušaj slijedi nakon pauze.</p>}
         {notice && (
           <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">
             <Check size={18} /> <span className="flex-1">{notice}</span>
@@ -335,7 +360,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
                     <Activity size={15} /> Trenutno stanje zraka
                   </div>
                   <h1 className="max-w-xl font-display text-3xl font-extrabold leading-tight sm:text-4xl">
-                    Kvalitet zraka: <span className="text-lime">{dashboard?.location.name ?? 'Zenica'}</span>, prikazan razumljivo.
+                    Kvalitet zraka: <span className="text-lime">{dashboard?.location.name ?? locations.find(l => l.slug === location)?.name ?? location}</span>, prikazan razumljivo.
                   </h1>
                   <p className="mt-4 max-w-2xl text-sm leading-6 text-emerald-50/70">
                     Satne atmosferske procjene, transparentno porijeklo podataka i PM2.5 prognoza bez curenja podataka — na jednom mjestu.
@@ -350,7 +375,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
                 <div className="flex items-center gap-5">
                   <AqiGauge value={aqiKnown ? currentAqi ?? null : null} color={band.color} />
                   <div>
-                    <p className="text-sm text-emerald-50/65">Evropski AQI</p>
+                    <p className="text-sm text-emerald-50/65">Evropski AQI · CAMS</p>
                     <p className="mt-1 font-display text-3xl font-extrabold">{band.label}</p>
                     <p className="mt-2 max-w-sm text-sm leading-5 text-emerald-50/65">{band.text}</p>
                   </div>
@@ -377,7 +402,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
             <div className="space-y-5">
               <SignalRow label="Aktivnosti na otvorenom" value={aqiKnown ? (currentAqi! > 60 ? 'Smanjiti' : 'Uobičajeno') : 'Nepoznato'} good={aqiKnown && currentAqi! <= 60} neutral={!aqiKnown} />
               <SignalRow label="Osjetljive grupe" value={aqiKnown ? (currentAqi! > 40 ? 'Potreban oprez' : 'Nizak rizik') : 'Nepoznato'} good={aqiKnown && currentAqi! <= 40} neutral={!aqiKnown} />
-              <SignalRow label="Vrsta podataka" value="Modelirana procjena" neutral />
+              <SignalRow label="Vrsta podataka" value="Modelirana procjena · CAMS" neutral />
             </div>
             <div className="mt-auto pt-7">
               <div className="rounded-2xl bg-slate-50 p-4 text-xs leading-5 text-slate-600">
@@ -394,7 +419,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
             <article key={key} className="card p-4 sm:p-5">
               <div className="flex items-start justify-between gap-2">
                 <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${accent}`}><Icon size={18} /></div>
-                <span className="rounded-full bg-slate-50 px-2 py-1 text-[0.63rem] font-bold uppercase tracking-wider text-slate-400">modelirano</span>
+                <span className="rounded-full bg-slate-50 px-2 py-1 text-[0.63rem] font-bold uppercase tracking-wider text-slate-400">CAMS · modelirano</span>
               </div>
               <p className="mt-5 text-xs font-semibold text-slate-500">{label} · {detail}</p>
               <p className="mt-1 font-display text-2xl font-extrabold sm:text-3xl">
@@ -466,12 +491,14 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
                 <span>{historyAggregation === 'maximum' ? `Prosjek ${historyGrouping === 'daily' ? 'dnevnih' : 'satnih'} maksimuma` : 'Prosjek prikazanih vrijednosti'} PM2.5: <strong className="text-ink">{averages == null ? '—' : `${formatNumber(averages)} μg/m³`}</strong></span>
               </div>
             </div>
-            {historyError ? (
+            {historyError && !history ? (
               <div className="flex h-[320px] items-center justify-center rounded-2xl bg-amber-50 px-5 text-center text-sm text-amber-800" role="alert">
                 Historijski podaci trenutno nisu dostupni. {historyError}
               </div>
             ) : (
-              <AirQualityChart history={history} loading={historyLoading} />
+              <><AirQualityChart history={history} loading={historyLoading && !history} />
+              {historyLoading && history && <p className="mt-2 text-xs text-slate-500">Osvježavanje grafikona; prethodni podaci odabranog izvora ostaju prikazani.</p>}
+              {historyError && history && <p className="mt-2 text-xs text-amber-700">{historyError} Prikazani su prethodno pohranjeni podaci.</p>}</>
             )}
             <div className="mt-4 flex flex-wrap items-start justify-between gap-3 border-t border-slate-100 pt-4 text-xs leading-5 text-slate-500">
               <p className="max-w-3xl">
@@ -490,31 +517,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
         <WeatherModelPanel comparison={weatherComparison} loading={comparisonLoading} />
 
         <section className="grid gap-5 lg:grid-cols-3">
-          <article className="card p-6 lg:col-span-2 sm:p-7">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="label">Porijeklo podataka</p>
-                <h2 className="mt-2 font-display text-2xl font-bold">Transparentnost ugrađena u sistem</h2>
-              </div>
-              <div className="flex items-center gap-2 rounded-full bg-sky-50 px-3 py-2 text-xs font-bold text-sky-800"><Info size={15} /> Nisu stvarna mjerenja</div>
-            </div>
-            <p className="mt-5 max-w-3xl text-sm leading-7 text-slate-600">
-              CAMS atmosferske modelirane procjene dostupne su putem servisa Open-Meteo. Ove vrijednosti nisu mjerenja fizičke stanice za lokaciju {dashboard?.location.name ?? 'Zenica'}. Predstavljaju satne procjene najbliže mrežne ćelije i treba ih tumačiti kao regionalni kontekst, a ne kao izloženost na nivou pojedinačne ulice.
-            </p>
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <InfoTile icon={Database} label="Izvor podataka" value={dashboard?.source.name ?? 'Open-Meteo / CAMS'} />
-              <InfoTile icon={MapPin} label="Lokacija mrežne ćelije" value={`${dashboard ? formatNumber(dashboard.location.latitude, 3) : '44,203'}°, ${dashboard ? formatNumber(dashboard.location.longitude, 3) : '17,908'}°`} />
-              <InfoTile icon={Gauge} label="Pohranjene vrijednosti" value={formatInteger(dashboard?.sync.records_stored ?? 0)} />
-            </div>
-            <a
-              href={dashboard?.source.url ?? 'https://open-meteo.com/en/docs/air-quality-api'}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-moss hover:underline"
-            >
-              Pregledaj metodologiju izvora <ExternalLink size={15} />
-            </a>
-          </article>
+          <ProvenancePanel city={location} source={source} stationId={stationId} stations={stations} dashboard={dashboard} />
 
           <article className="card p-6 sm:p-7">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-moss"><ServerCog size={22} /></div>
@@ -522,9 +525,9 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
             <h2 className="mt-2 font-display text-2xl font-bold">Manje zahtjeva, korisni podaci</h2>
             <ul className="mt-5 space-y-4 text-sm text-slate-600">
               <GreenItem text="Predmemorija izvora od 30 minuta" />
-              <GreenItem text="Jedan objedinjeni zahtjev za nadzornu ploču" />
-              <GreenItem text="Indeksirana pohrana bez duplikata" />
-              <GreenItem text="Klijentsko osvježavanje svakih 15 minuta" />
+              <GreenItem text="Lokalna predmemorija po gradu i stanici" />
+              <GreenItem text="Inkrementalna pohrana bez duplikata" />
+              <GreenItem text="Trajni ML modeli; status poslova svakih 30 sekundi" />
             </ul>
             <div className="mt-6 rounded-2xl bg-[#eef5e8] p-4">
               <p className="text-xs font-semibold text-slate-500">Starost predmemorije</p>

@@ -10,6 +10,10 @@ export type Location = {
 }
 
 export type SensorStation = {
+  location: string
+  latitude: number | null
+  longitude: number | null
+  validation_counts: Record<string, number>
   id: number
   name: string
   provider: string
@@ -41,6 +45,8 @@ export type DashboardData = {
   history: Reading[]
   units: Record<string, string>
   source: {
+    grid_latitude?: string
+    grid_longitude?: string
     name: string
     model: string
     type: string
@@ -83,7 +89,7 @@ export type HistoricalData = {
   requested_hours: number
   points: HistoricalPoint[]
   units: Record<HistorySeriesKey, string>
-  pollution_source: { name: string; model?: string; station?: string; type: 'modeled' | 'sensor'; url: string }
+  pollution_source: { name: string; model?: string; station?: string; station_id?: string; type: 'modeled' | 'sensor'; url: string }
   weather_sources: Array<{ name: string; type: string; url: string }>
   timezone: string
   generated_at: string
@@ -91,7 +97,11 @@ export type HistoricalData = {
 }
 
 export type ForecastData = {
-  status: 'ready' | 'insufficient_data' | 'comparison_ready_forecast_unavailable'
+  location: string
+  source_type: 'sensor' | 'modeled'
+  station_id: number | null
+  status: 'ready' | 'insufficient_data' | 'comparison_ready_forecast_unavailable' | 'pending'
+  computation_status?: string
   message: string
   model: string | null
   trained_samples: number
@@ -150,9 +160,13 @@ export type WeatherData = {
 }
 
 export type WeatherModelComparison = {
+  location: string
+  source_type: 'sensor' | 'modeled'
+  station_id: number | null
   provenance: string
   by_horizon: Record<string, Record<string, number>>
-  status: 'ready' | 'comparison_ready_forecast_unavailable' | 'insufficient_data'
+  status: 'ready' | 'comparison_ready_forecast_unavailable' | 'insufficient_data' | 'pending'
+  computation_status?: string
   message: string
   comparison_is_fair: boolean
   limitation: string

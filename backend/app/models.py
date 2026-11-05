@@ -22,6 +22,69 @@ class Location(Base):
     readings: Mapped[list["AirQualityReading"]] = relationship(back_populates="location")
 
 
+class BackgroundJob(Base):
+    __tablename__ = "background_jobs"
+    key: Mapped[str] = mapped_column(String(240), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    arguments: Mapped[str] = mapped_column(Text)
+    priority: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DataCoverage(Base):
+    """Attempted UTC date ranges, distinct from actual measurement completeness."""
+    __tablename__ = "data_coverage"
+    key: Mapped[str] = mapped_column(String(240), primary_key=True)
+    location_id: Mapped[int] = mapped_column(ForeignKey("locations.id"), index=True)
+    dataset: Mapped[str] = mapped_column(String(160), index=True)
+    day: Mapped[date] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(32))
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ModelArtifact(Base):
+    __tablename__ = "model_artifacts"
+    key: Mapped[str] = mapped_column(String(240), primary_key=True)
+    version: Mapped[str] = mapped_column(String(120))
+    metadata_json: Mapped[str] = mapped_column(Text)
+    forest_json: Mapped[str] = mapped_column(Text)
+    evaluation_json: Mapped[str] = mapped_column(Text)
+    trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ModelResult(Base):
+    __tablename__ = "model_results"
+    key: Mapped[str] = mapped_column(String(240), primary_key=True)
+    input_version: Mapped[str] = mapped_column(String(64))
+    response_json: Mapped[str] = mapped_column(Text)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ModelExecution(Base):
+    __tablename__ = 'model_executions'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    model_key: Mapped[str] = mapped_column(String(240), index=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    elapsed_ms: Mapped[float] = mapped_column(Float)
+    trained: Mapped[bool] = mapped_column(Boolean)
+    evaluated: Mapped[bool] = mapped_column(Boolean)
+    forecast_recomputed: Mapped[bool] = mapped_column(Boolean)
+
+
+class SourceMetadata(Base):
+    __tablename__ = 'source_metadata'
+    key: Mapped[str] = mapped_column(String(240), primary_key=True)
+    metadata_json: Mapped[str] = mapped_column(Text)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AirQualityReading(Base):
     __tablename__ = "air_quality_readings"
     __table_args__ = (

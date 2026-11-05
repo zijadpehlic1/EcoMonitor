@@ -1,9 +1,10 @@
 from datetime import UTC, datetime, timedelta
+import json
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AirQualityReading, Location
+from app.models import AirQualityReading, Location, SourceMetadata
 from app.schemas import DashboardResponse, LocationOut, ReadingOut, SyncInfo
 from app.services.air_quality import (
     MODEL_NAME,
@@ -71,6 +72,8 @@ def build_dashboard(db: Session, location: Location, hours: int) -> DashboardRes
     )
 
     last_sync = get_last_successful_sync(db, location.id)
+    metadata = db.get(SourceMetadata, f'{location.id}:{SOURCE_NAME}')
+    grid = json.loads(metadata.metadata_json) if metadata else {}
     cache_age = None
     if last_sync and last_sync.completed_at:
         cache_age = round((now - aware_utc(last_sync.completed_at)).total_seconds() / 60, 1)
@@ -81,6 +84,7 @@ def build_dashboard(db: Session, location: Location, hours: int) -> DashboardRes
         history=[_reading_out(item) for item in readings],
         units=UNITS,
         source={
+            **({'grid_latitude': str(grid['latitude']), 'grid_longitude': str(grid['longitude'])} if 'latitude' in grid and 'longitude' in grid else {}),
             "name": SOURCE_NAME,
             "model": MODEL_NAME,
             "type": "modeled",

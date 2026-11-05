@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import isfinite
@@ -9,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.models import AirQualityReading, Location, SyncRun
+from app.models import AirQualityReading, Location, SyncRun, SourceMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,10 @@ def _validate_provider_units(payload: dict) -> None:
 
 def persist_payload(db: Session, location: Location, payload: dict, sync_run: SyncRun) -> SyncResult:
     _validate_provider_units(payload)
+    if payload.get('latitude') is not None and payload.get('longitude') is not None:
+        db.merge(SourceMetadata(key=f'{location.id}:{SOURCE_NAME}', metadata_json=json.dumps({
+            'latitude': payload['latitude'], 'longitude': payload['longitude'], 'hourly_units': payload.get('hourly_units', {})}),
+            checked_at=utc_now()))
     hourly = payload.get("hourly") or {}
     timestamps = hourly.get("time") or []
     sync_run.records_received = len(timestamps)
@@ -227,39 +232,24 @@ async def synchronize_location(
     force: bool = False,
     settings: Settings | None = None,
 ) -> SyncResult:
+    from app.services.incremental import sync_dataset
+    settings = settings or get_settings()
     async with _sync_lock:
-        settings = settings or get_settings()
-        if not force and cache_is_fresh(db, location.id, settings.sync_interval_minutes):
-            return SyncResult(status="cached", message="Cached data is still fresh; external request skipped.")
-
-        sync_run = SyncRun(
-            source_name=SOURCE_NAME,
-            location_id=location.id,
-            started_at=utc_now(),
-            status="running",
-        )
-        db.add(sync_run)
-        db.commit()
-
+        today = utc_now().date()
         try:
-            payload = await fetch_open_meteo(location, settings)
-            return persist_payload(db, location, payload, sync_run)
+            result = await sync_dataset(db, location, SOURCE_NAME,
+                today-timedelta(days=min(settings.initial_history_days, 90)), today+timedelta(days=6), settings, live=True)
+            return SyncResult(status=result['status'], inserted=result['inserted'], updated=result['updated'],
+                message='Inkrementalna provjera završena; pohranjena historija je zadržana.')
         except Exception as exc:
-            db.rollback()
-            failed_run = db.get(SyncRun, sync_run.id)
-            if failed_run:
-                failed_run.status = "failed"
-                failed_run.completed_at = utc_now()
-                failed_run.error_message = str(exc)[:1000]
-                db.commit()
-            logger.exception("Air-quality synchronization failed for %s", location.slug)
-            return SyncResult(status="failed", message=f"Data provider unavailable: {exc}")
+            return SyncResult(status='failed', message=type(exc).__name__)
 
 
 def stored_reading_count(db: Session, location_id: int) -> int:
     return int(
         db.scalar(
-            select(func.count(AirQualityReading.id)).where(AirQualityReading.location_id == location_id)
+            select(func.count(AirQualityReading.id)).where(AirQualityReading.location_id == location_id,
+                AirQualityReading.source_name == SOURCE_NAME, AirQualityReading.source_type == 'modeled')
         )
         or 0
     )

@@ -17,7 +17,7 @@ type Props = {
 }
 
 export function ForecastPanel({ forecast, loading }: Props) {
-  if (loading) {
+  if ((loading && !forecast) || forecast?.status === 'pending') {
     return (
       <section className="card flex min-h-[170px] items-center gap-4 p-6 sm:p-7" role="status" aria-live="polite">
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-50 text-violet-700">
@@ -27,7 +27,7 @@ export function ForecastPanel({ forecast, loading }: Props) {
           <p className="label">Mašinsko učenje</p>
           <h2 className="mt-1 font-display text-xl font-bold">Izračunavanje 24-satne PM2.5 prognoze</h2>
           <p className="mt-2 text-sm leading-6 text-slate-500">
-            Hronološki walk-forward backtest može potrajati. Historijski grafikon i ostali podaci ostaju dostupni.
+            Izračun se izvršava u pozadini i može potrajati. Historijski grafikon i ostali podaci ostaju dostupni.
           </p>
         </div>
       </section>
@@ -64,6 +64,7 @@ export function ForecastPanel({ forecast, loading }: Props) {
 
   return (
     <section className="card overflow-hidden">
+      <p className="px-6 pt-4 text-xs text-slate-500">Izračunato: {formatDateTime(forecast.generated_at)}{forecast.computation_status === 'running' || forecast.computation_status === 'queued' ? ' · Provjera novog rezultata u pozadini.' : ''}</p>
       <div className="flex flex-col gap-5 border-b border-slate-100 p-6 sm:flex-row sm:items-start sm:justify-between sm:p-7">
         <div>
           <div className="flex items-center gap-2 text-moss">

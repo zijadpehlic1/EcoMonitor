@@ -4,6 +4,45 @@ EcoMonitor is a working academic environmental monitoring application for **“P
 
 > **Data integrity:** Open-Meteo air-quality values come from CAMS atmospheric models. They are regional modeled estimates—not measurements from a physical sensor in Zenica. EcoMonitor preserves this distinction throughout the database, API, and user interface and never invents missing measurements.
 
+## Persistent loading and background execution (November 2026)
+
+The API serves existing local records immediately. Startup launches two separate worker processes: one for synchronization and one for ML. NumPy is initialized on the ML process main thread before threaded execution, avoiding a Windows/Python 3.14 native-import hang observed during testing. The API does not import scikit-learn or run model training in a request handler.
+
+- **Durable queue:** `background_jobs` has unique job identities, atomic claims, renewable 90-second database leases, priorities and retry times. A separate leader lease elects one worker of each kind even with multiple API processes/reloaders. A crash is recoverable after lease expiry. Graceful shutdown signals workers through stdin, permits 30 seconds to finish, then terminates remaining processes; committed intervals and results survive. SQLite uses WAL and a 30-second busy timeout. PostgreSQL remains supported by SQLAlchemy and dialect-specific upserts, but was not integration-tested in this run.
+- **Initial priority:** Zenica → Sarajevo → Mostar → Banja Luka, with 1 → 7 → 30 → 90-day stages inside each city. Selecting a city can promote its already queued initial stage; it does not create an external refresh. Provider date granularity means the 24-hour stage may span two calendar dates, and future operational weather/CAMS forecasts are also refreshed. The chart still displays the selected exact lookback and sample counts.
+- **Persistent interval ledger:** `data_coverage` tracks each city/dataset/UTC date. Source names distinguish CAMS, operational weather, reanalysis and Previous Runs; physical keys include the verified station ID. Already stored full UTC days are adopted; missing/partial dates are requested in adjacent batches of at most seven days. Each later stage requests only its missing extension. Daily provider endpoints necessarily return some existing hours when repairing a partial date. A checked date is **not** a claim of complete measurements.
+- **Refresh policy:** recent operational data uses `SYNC_INTERVAL_MINUTES` (default 30); physical history uses a 60-minute recent check; archived weather uses `WEATHER_HISTORY_SYNC_HOURS` (default 24). `SYNC_REVISION_HOURS=48` defines the small recent revision window. Old partial/empty meteorological responses are reconsidered after `UNAVAILABLE_RETRY_DAYS=7`; failed intervals wait 30 minutes. Unavailable physical endpoints are also recorded. Successful historical physical responses, including missing hours, remain checked; recent overlap captures delayed values. Failed outer jobs use bounded exponential backoff. No historical records are removed.
+- **Manual refresh:** existing POST refresh endpoints now return `queued` or `cached` promptly. They schedule the deduplicated city job and respect provider freshness; `force` no longer means downloading all 90 days. Read `/api/v1/sync/status?location=mostar` for stage, source failures, revision and coverage. Background work continues with the browser closed. `/sensors/history/refresh?days=...` retains a bounded 1–366-day physical-only import scope.
+- **Frontend:** exact URL keys isolate city, station, source, range, grouping and aggregation. Concurrent identical GETs share a promise. In-memory caching plus bounded-size localStorage entries retain small responses across reloads; large hourly arrays remain in memory and are always persisted in the backend database. GET data TTL is five minutes; job/ML polling has a short TTL. Existing same-dataset charts and metrics remain visible while refreshing or on network errors. A source/city mismatch is never rendered as the newly selected dataset. Background revision changes invalidate only that city's responses. Status polling is 30 seconds; settled ML checks are five minutes and ordinary data polling remains 15 minutes.
+
+### Persisted ML artifacts
+
+`model_artifacts` stores JSON numeric tree arrays, a checksum, algorithm/scikit-learn version, training-data fingerprint and frozen evaluation JSON. No pickle, joblib file, uploaded model or executable deserialization is used. `model_results` separately stores generated forecast responses and input fingerprints. The forest's JSON inference uses float32 input comparisons, matching scikit-learn tree behavior in tests. `model_executions` records actual completed computation duration and whether training/evaluation occurred; counts start when this instrumentation was introduced and do not invent historical counts.
+
+The existing chronological 80/20, recursive 24-step, matched-origin comparison and persistence baseline are unchanged. Historical evaluation and the final production fit are saved as one consistent version; future inference reuses that version independently. New pollution/operational-weather inputs can regenerate a forecast without retraining or repeating the historical backtest. Unchanged inputs reuse the existing response across process restarts. Retraining requires both `ML_RETRAIN_HOURS=24` elapsed and `ML_MIN_NEW_SAMPLES=24` new valid raw PM2.5 samples, or a correction/removal in the previously used pollution/archive prefix, an algorithm/version change, or explicit `POST /api/v1/forecast/retrain?location=...&source=sensor&station_id=...`. A new model's old evaluation metrics remain visible until its replacement commits; displayed test dates identify their actual period. Insufficient/stale inputs produce informative states; no unverified improvement is asserted.
+
+`/forecast/pm25` and `/forecast/pm25/weather-comparison` now return saved results or `status=pending`, with `computation_status` (`queued`, `running`, `done`). They enqueue only local computation, never provider downloads. The calculation worker checks fingerprints before doing expensive work. Model tasks are deduplicated; one ML process with single-thread forests protects normal API responsiveness.
+
+### Source selection and provenance
+
+The bottom provenance card follows the **same city/source/station selection as history and ML**. Physical mode reports provider, station, latest stored timestamp, validation counts and pollutant-time record count for that station only. CAMS mode retains its modeled explanation and CAMS-only row count. Newly received CAMS grid coordinates are persisted in `source_metadata`; if absent in legacy records, the interface explicitly labels coordinates as the **query location**, not a verified grid cell. AQI/health guidance and modeled pollutant cards remain CAMS; weather and the temperature overlay remain Open-Meteo models/reanalysis. These simultaneous sources are explicitly identified. UI theme, layout, filters, localization and ports are preserved.
+
+### Reproducible optimization checks
+
+From `backend`, with the server running:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/measure_loading.py
+.\.venv\Scripts\python.exe scripts/measure_model_reuse.py --city mostar --regenerate
+.\.venv\Scripts\python.exe scripts/measure_model_reuse.py --city mostar
+```
+
+The second command expires only a derived forecast-response identity to measure inference with retained models/evaluations. It refuses an actively running job for that model. The third runs in a fresh process and measures persisted reuse. Read the resulting JSON rather than assuming a speedup. `scripts/sync_all.py` and ordinary historical-import CLI calls enqueue durable jobs; start the backend to execute them. An explicit `--end` historical research replay requires the sync worker to be stopped. Use an offline snapshot for reproducible scientific evaluation.
+
+Actual local verification on 5 November 2026 UTC: **57 backend tests, 23 frontend tests and the production build passed**. After backend restart, three-request medians across four cities were **8.82–10.54 ms** for dashboard responses, **10.04–13.78 ms** for 24-hour physical history and **6.19–7.37 ms** for stored ML/evaluation responses. Actual Mostar model reuse and forecast regeneration both made **zero RF fit calls**; regeneration took **739.04 ms** (PM2.5-only) and **867.84 ms** (weather-aware). A prior required training/evaluation took 18.98 s and 28.01 s respectively. Raw JSON reports and the distinctions between response delivery, inference and training are documented in `AUDIT.md`. These are local observations, not controlled legacy-baseline, load or energy benchmarks. Immediate repeat ingestion checks made zero additional provider requests after bounded CAMS/weather/FHMZ refreshes.
+
+New tables are additive (`create_all`); existing measurements are neither reset nor deleted. Back up the SQLite database with SQLite's backup API (or PostgreSQL with `pg_dump`) before deploying changes. There is no general migration framework yet. Single-machine clock agreement is assumed for leases; multi-host failover, automated worker supervision and large-scale load testing remain future work. API auth/rate limiting and FHMZ redistribution permission remain necessary before public deployment. No energy or carbon savings are claimed.
+
 ## Technology stack
 
 - FastAPI, SQLAlchemy 2, Pydantic and PostgreSQL/SQLite
@@ -27,11 +66,11 @@ The verified FHMZ fallback uses Zenica Brist, Sarajevo Bjelave and Mostar. Autom
 
 ### Historical physical measurements
 
-`sensor_history.py` imports OpenAQ `/sensors/{id}/hours` with pagination, units, coverage/quality flags and licence metadata. `fhmz_history.py` imports the public portal's `/rest/aqdata/data` using `aqdata_type=0` (hourly source data), after checking station metadata. Initial imports request 92 days; subsequent daily imports overlap the last 72 hours for delayed/revised values. `force=true` repeats the selected range. Neither importer invents missing hours. Imports fail atomically and do not advance a success checkpoint after a failed page/request.
+`sensor_history.py` imports OpenAQ `/sensors/{id}/hours` with pagination, units, coverage/quality flags and licence metadata. `fhmz_history.py` imports the public portal's `/rest/aqdata/data` using `aqdata_type=0` (hourly source data), after checking station metadata. The background queue progressively checks 1, 7, 30 and 90 days and reuses the persistent interval ledger. Small recent overlap captures delayed/revised values; ordinary refresh never forces the full historical range. Neither importer invents missing hours. Imports fail atomically and do not advance a success checkpoint after a failed page/request.
 
 Both providers label physical hours by interval **end**. This timestamp remains in UTC for ML alignment; for daily charts midnight-ending measurements belong to the preceding Sarajevo day. FHMZ local timestamps lack offsets: ambiguous/nonexistent DST times are skipped, not guessed. Negative/nonfinite values are rejected. Provider-flagged or incomplete OpenAQ hours remain stored with metadata but are excluded from charts and ML. Every physical series uses exactly one station.
 
-Run from `backend` (the same cache-aware operation runs daily in the scheduler):
+Run from `backend` to enqueue historical work (the running backend executes it):
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/import_sensor_history.py --city zenica --days 92
@@ -44,7 +83,7 @@ FHMZ public academic access was verified, but no explicit redistribution licence
 
 ## Quick start (Windows PowerShell)
 
-The default configuration uses SQLite and requires no external services.
+The default configuration uses SQLite and requires no external database or queue service. Provider synchronization requires internet connectivity.
 
 ### 1. Backend
 
@@ -90,8 +129,11 @@ SQLAlchemy creates the schema on application startup. SQLite remains the zero-co
 flowchart LR
     UI[React dashboard] -->|REST /api/v1| API[FastAPI routes]
     API --> DS[Dashboard service]
-    API --> ML[PM2.5-only and weather-aware ML services]
-    BG[Background sync] --> IN[Open-Meteo ingestion adapters]
+    API -->|enqueue / read cached result| Q[Durable jobs and model results]
+    Q --> BG[Separate sync worker]
+    Q --> MW[Separate ML worker]
+    MW --> ML[Training / evaluation / inference]
+    BG --> IN[Incremental Open-Meteo adapters]
     BG --> SI[OpenAQ / FHMZ adapters]
     SI -->|hourly current + daily historical import| DB
     API --> HS[History / station-scoped dataset service]
@@ -118,20 +160,27 @@ The backend is layered into API routes, application services, SQLAlchemy persist
 | `sensor_measurements` | Timestamped physical measurements with pollutant, value, unit and validation status | Unique `(station_id, measured_at, pollutant)` |
 | `sensor_import_states` | Public station/licence metadata, last successful import and imported window | Primary key/FK `station_id` |
 | `sensor_measurement_metadata` | Instrument ID, period boundaries, coverage and provider flags | Primary key/FK `measurement_id` |
-| `sync_runs` | Provider request audit, duration metadata, row counts and failures | Indexed source; linked location |
+| `sync_runs` | Provider sync-run audit, row counts and failures | Indexed source; linked location |
+| `background_jobs` | Durable queue, priorities, leases, retry times and latest result | Unique job key |
+| `data_coverage` | Per-city/source/station UTC-date checks and retry states | Unique dataset/date key; indexed location/source |
+| `model_artifacts` | JSON forest, versioned input fingerprint and evaluation | Unique city/source/station/model key |
+| `model_results` | Latest completed forecast response and input version | Unique model/horizon key |
+| `model_executions` | Actual computation duration and training/evaluation flags | Indexed model key |
+| `source_metadata` | Returned provider grid coordinates and units | Unique city/provider key |
 
 Pollutant columns have a schema-level unit contract of `μg/m³`; European AQI is unitless. Units are validated when Open-Meteo supplies `hourly_units` and the REST response includes an explicit units map. Units are not repeated in every database row.
 
 ## Data flow and refresh behavior
 
-1. Startup seeds all four cities and launches an asynchronous synchronization loop. Every city receives air, weather and sensor refreshes; individual provider failures are isolated. Database work remains synchronous, so this is a single-process development scheduler, not a distributed job system.
-2. The ingestion service calls the Open-Meteo Air Quality endpoint for up to 92 past days and seven forecast days. Open-Meteo describes `past_days` as archived model forecasts; these are not station observations.
-3. Unix timestamps requested in GMT are normalized to timezone-aware UTC. Provider values, source type (`modeled`), model name and the ingestion-time forecast flag are persisted. API reads classify historical versus future data from valid time, so an old forecast becomes historical modeled data after its valid time passes.
-4. A database uniqueness constraint and range lookup prevent duplicate rows. Changed provider values update the existing row. An in-process synchronization lock prevents the background task and a manual refresh racing in the normal single-process deployment.
-5. Successful syncs are cached for 30 minutes. The dashboard polls its compact aggregate endpoint every 15 minutes without forcing an upstream request.
-6. Provider failures are recorded and stored readings remain queryable.
+1. Startup seeds city metadata and launches isolated sync/ML workers without awaiting downloads or fitting.
+2. The durable queue checks cities and 1/7/30/90-day stages in the priority order documented above. The coverage planner requests missing date intervals and bounded recent revisions, preserving historical data.
+3. Unix timestamps requested in GMT are normalized to UTC. Read-time classification distinguishes past/current estimates from future forecasts; past CAMS forecasts never become physical observations.
+4. Identity constraints, indexed lookups, atomic metadata upserts and database job/leader leases prevent duplicate background work. Interval transactions preserve previously committed readings after failures.
+5. React reads local data, caches exact dataset queries and polls job progress separately. A manual refresh enqueues work rather than synchronously downloading history or retraining.
+6. The ML worker persists model/evaluation versions and generated responses; API reads return those immediately while replacements run. Failed provider intervals and job retries remain visible through progress metadata.
 
-Weather follows the same identity and failure-handling pattern. The Weather Forecast API retrieves seven past and seven future days for `temperature_2m`, `relative_humidity_2m`, `wind_speed_10m`, `precipitation` and daily minimum/maximum/mean temperature. The Historical Weather API supplies the older portion of the configured 92-day chart window as model reanalysis. Past/current values are labeled **modeled** or **historical modeled**, future values **forecast**, and none are presented as a local weather-station observation. Daily values use `Europe/Sarajevo`; hourly Unix timestamps are normalized to UTC before joining air-quality rows. Historical weather and archived forecasts are separate datasets: reanalysis is used only for visualization, while leakage-safe ML evaluation continues to use Previous Runs data that was available at the historical prediction origin.
+
+Weather follows the same identity and failure-handling pattern. The Weather Forecast API incrementally checks the recent operational window and up to seven forecast dates for `temperature_2m`, `relative_humidity_2m`, `wind_speed_10m`, `precipitation` and daily minimum/maximum/mean temperature. The Historical Weather API supplies the older portion of the configured 90-day staged chart window as model reanalysis. Past/current values are labeled **modeled** or **historical modeled**, future values **forecast**, and none are presented as a local weather-station observation. Daily values use `Europe/Sarajevo`; hourly Unix timestamps are normalized to UTC before joining air-quality rows. Historical weather and archived forecasts are separate datasets: reanalysis is used only for visualization, while leakage-safe ML evaluation continues to use Previous Runs data that was available at the historical prediction origin.
 
 The historical chart uses `/history`. The source/station selector also controls both ML panels and defaults to physical measurements. CAMS and physical data are never merged. Daily averages/maxima operate on hourly means, independently per pollutant/temperature, with 23/24/25 expected hours according to Sarajevo DST. Null buckets explicitly break lines across gaps. The tooltip retains sample counts and peak times. The first/last day of a rolling range can be partial. Daily values are descriptive, not regulatory compliance statistics.
 
@@ -147,14 +196,18 @@ Historical ML evaluation separately retrieves Open-Meteo Previous Runs fields en
 | GET | `/api/v1/locations` | Supported locations |
 | GET | `/api/v1/dashboard?location=zenica&hours=24` | Latest reading, history, units, source and sync metadata in one request |
 | GET | `/api/v1/history?location=zenica&hours=720&grouping=daily&aggregation=maximum` | Backend-aligned pollution/temperature history with sample counts and peak timestamps |
-| POST | `/api/v1/refresh?location=zenica&force=false` | Cache-aware manual ingestion |
-| GET | `/api/v1/forecast/pm25?location=zenica&horizon=24` | ML forecast and chronological hold-out metrics |
+| POST | `/api/v1/refresh?location=zenica&force=false` | Enqueue deduplicated incremental city refresh |
+| GET | `/api/v1/forecast/pm25?location=zenica&horizon=24` | Persisted forecast/hold-out metrics or pending state |
 | GET | `/api/v1/weather?location=zenica` | Latest modeled weather, daily summary and next 24 forecast hours |
 | POST | `/api/v1/weather/refresh?location=zenica&force=false` | Independently cache-aware operational, historical-reanalysis and archived-forecast weather synchronization |
 | GET | `/api/v1/forecast/pm25/weather-comparison?location=zenica&horizon=24` | Matched PM2.5-only, weather-aware and persistence metrics plus weather-aware forecast |
 | GET | `/api/v1/sensors/current?location=zenica` | Fresh/stale physical-station status and latest verified measurements |
 | GET | `/api/v1/sensors/coverage` | Locally verified coverage state for all configured cities |
 | POST | `/api/v1/sensors/refresh?location=zenica&force=false` | Cache-aware OpenAQ-first/FHMZ-fallback synchronization |
+| GET | `/api/v1/sensors/stations?location=mostar` | Station identities, station-specific counts, validation distribution and attribution |
+| POST | `/api/v1/sensors/history/refresh?location=mostar&days=90` | Enqueue incremental physical history check |
+| GET | `/api/v1/sync/status?location=mostar` | Durable queue stage, failures, revision and checked dates |
+| POST | `/api/v1/forecast/retrain?location=mostar&source=sensor&station_id=2` | Explicitly queue training/evaluation; keep existing results available |
 | GET | `/api/v1/sustainability/metrics` | Measurable storage/request-efficiency indicators |
 
 All responses include `X-Process-Time-Ms` for reproducible server-side latency measurements.
@@ -195,7 +248,7 @@ EcoMonitor applies and exposes measurable techniques:
 - **Client efficiency:** a single dashboard endpoint replaces multiple pollutant requests; background polling is every 15 minutes.
 - **Storage efficiency:** one wide hourly row stores all pollutants; duplicate keys update in place.
 - **Query efficiency:** composite location/time and forecast indexes support the primary range queries.
-- **Computation reuse:** bounded 16-entry caches distinguish city, source, station, horizon, pollution content hash and ingestion metadata; weather changes also invalidate the comparison. Concurrent duplicate training is not yet coalesced.
+- **Computation reuse:** durable JSON model/evaluation artifacts and independent forecast results distinguish city, station, source, horizon and input version. Queue identities coalesce repeated work, and unchanged inputs skip computation across restarts.
 - **Payload discipline:** charts request only the selected range; the default is 24 hours.
 
 Measure the running application with:

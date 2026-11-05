@@ -340,127 +340,25 @@ async def synchronize_weather(
     force: bool = False,
     settings: Settings | None = None,
 ) -> WeatherSyncResult:
+    from app.services.incremental import sync_dataset
     settings = settings or get_settings()
+    today = utc_now().date()
+    first = today-timedelta(days=min(settings.weather_history_days, 90))
+    results = []
     async with _weather_sync_lock:
-        live_fresh = _source_cache_is_fresh(
-            db,
-            location.id,
-            LIVE_WEATHER_SOURCE,
-            timedelta(minutes=settings.sync_interval_minutes),
-        )
-        archive_fresh = _source_cache_is_fresh(
-            db,
-            location.id,
-            ARCHIVED_WEATHER_SOURCE,
-            timedelta(hours=settings.weather_history_sync_hours),
-        )
-        historical_fresh = _source_cache_is_fresh(
-            db,
-            location.id,
-            HISTORICAL_WEATHER_SOURCE,
-            timedelta(hours=settings.weather_history_sync_hours),
-        )
-        live_status = "cached" if live_fresh and not force else "pending"
-        # Manual dashboard refresh may bypass the short operational cache, but
-        # the large archived forecast request remains on its 24-hour schedule.
-        archive_status = "cached" if archive_fresh else "pending"
-        historical_status = "cached" if historical_fresh else "pending"
-        inserted = 0
-        updated = 0
-
-        if live_status == "pending":
-            run = _start_sync_run(db, location, LIVE_WEATHER_SOURCE)
+        for source, begin, end, live in (
+            (LIVE_WEATHER_SOURCE, today-timedelta(days=6), today+timedelta(days=6), True),
+            (HISTORICAL_WEATHER_SOURCE, first, today-timedelta(days=7), False),
+            (ARCHIVED_WEATHER_SOURCE, first, today, False)):
             try:
-                payload = await fetch_live_weather(location, settings)
-                new_rows, changed_rows = persist_hourly_weather(
-                    db,
-                    location,
-                    payload,
-                    run,
-                    source_name=LIVE_WEATHER_SOURCE,
-                    source_url=WEATHER_SOURCE_URL,
-                    field_map={field: field for field in HOURLY_FIELDS},
-                    forecast_lead_hours=0,
-                    archived=False,
-                )
-                daily_new, daily_changed = persist_daily_weather(db, location, payload)
-                run.records_inserted += daily_new
-                run.records_updated += daily_changed
-                inserted += new_rows + daily_new
-                updated += changed_rows + daily_changed
-                _finish_success(db, run)
-                live_status = "success"
-            except Exception as exc:
-                _finish_failure(db, run.id, exc)
-                live_status = "failed"
-                logger.exception("Live weather synchronization failed for %s", location.slug)
-
-        if archive_status == "pending":
-            run = _start_sync_run(db, location, ARCHIVED_WEATHER_SOURCE)
-            try:
-                payload = await fetch_archived_forecast_weather(location, settings)
-                new_rows, changed_rows = persist_hourly_weather(
-                    db,
-                    location,
-                    payload,
-                    run,
-                    source_name=ARCHIVED_WEATHER_SOURCE,
-                    source_url=PREVIOUS_RUNS_SOURCE_URL,
-                    field_map=ARCHIVE_FIELD_MAP,
-                    forecast_lead_hours=24,
-                    archived=True,
-                )
-                inserted += new_rows
-                updated += changed_rows
-                _finish_success(db, run)
-                archive_status = "success"
-            except Exception as exc:
-                _finish_failure(db, run.id, exc)
-                archive_status = "failed"
-                logger.exception("Archived weather synchronization failed for %s", location.slug)
-
-        if historical_status == "pending":
-            run = _start_sync_run(db, location, HISTORICAL_WEATHER_SOURCE)
-            try:
-                payload = await fetch_historical_weather(location, settings)
-                new_rows, changed_rows = persist_hourly_weather(
-                    db,
-                    location,
-                    payload,
-                    run,
-                    source_name=HISTORICAL_WEATHER_SOURCE,
-                    source_url=HISTORICAL_WEATHER_SOURCE_URL,
-                    field_map={field: field for field in HOURLY_FIELDS},
-                    forecast_lead_hours=0,
-                    archived=False,
-                    source_type_override="historical_modeled",
-                )
-                inserted += new_rows
-                updated += changed_rows
-                _finish_success(db, run)
-                historical_status = "success"
-            except Exception as exc:
-                _finish_failure(db, run.id, exc)
-                historical_status = "failed"
-                logger.exception("Historical weather synchronization failed for %s", location.slug)
-
-        statuses = {live_status, archive_status, historical_status}
-        status = "failed" if statuses == {"failed"} else ("partial" if "failed" in statuses else "success")
-        if statuses == {"cached"}:
-            status = "cached"
-        return WeatherSyncResult(
-            status=status,
-            live_status=live_status,
-            historical_status=historical_status,
-            archive_status=archive_status,
-            inserted=inserted,
-            updated=updated,
-            message=(
-                "Weather synchronization completed "
-                f"(operational={live_status}, historical={historical_status}, archived={archive_status}) "
-                "with explicit source classifications."
-            ),
-        )
+                results.append(await sync_dataset(db, location, source, begin, end, settings, live=live))
+            except Exception:
+                results.append({'status': 'failed', 'inserted': 0, 'updated': 0})
+    statuses = [r['status'] for r in results]
+    return WeatherSyncResult(status='partial' if 'failed' in statuses else ('cached' if set(statuses)=={'cached'} else 'success'),
+        live_status=statuses[0], historical_status=statuses[1], archive_status=statuses[2],
+        inserted=sum(r['inserted'] for r in results), updated=sum(r['updated'] for r in results),
+        message='Inkrementalna provjera meteoroloških podataka završena.')
 
 
 def _weather_out(reading: WeatherReading, now: datetime) -> WeatherReadingOut:

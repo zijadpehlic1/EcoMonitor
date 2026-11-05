@@ -43,7 +43,7 @@ def parse_hour(item, parameter, start, end):
         return None
 
 
-async def synchronize_sensor_history(db: Session, location: Location, *, days=92, force=False, end=None, settings=None):
+async def synchronize_sensor_history(db: Session, location: Location, *, days=92, force=False, end=None, start=None, settings=None):
     """92 days initially, then overlap 72 h for delayed/revised reports. All pages or rollback.
 
     An explicit end allows reproducible historical imports of discontinued stations.
@@ -52,7 +52,7 @@ async def synchronize_sensor_history(db: Session, location: Location, *, days=92
     settings = settings or get_settings()
     if location.slug in ('zenica', 'mostar'):
         from app.services.fhmz_history import synchronize_fhmz_history
-        return await synchronize_fhmz_history(db, location, days=days, force=force, end=end, settings=settings)
+        return await synchronize_fhmz_history(db, location, days=days, force=force, end=end, start=start, settings=settings)
     if not settings.openaq_api_key:
         return {"status": "unavailable", "message": "OpenAQ ključ nije konfiguriran."}
     if not 1 <= days <= 366:
@@ -61,6 +61,7 @@ async def synchronize_sensor_history(db: Session, location: Location, *, days=92
     if not ids:
         return {"status": "unavailable", "message": "Nema potvrđene OpenAQ stanice za ovaj grad."}
     requested_end = aware_utc(end) if end else utc_now()
+    requested_start = aware_utc(start) if start else None
     if requested_end > utc_now():
         raise ValueError("Historical import cannot include future data")
     headers = {"X-API-Key": settings.openaq_api_key.get_secret_value()}
@@ -85,7 +86,7 @@ async def synchronize_sensor_history(db: Session, location: Location, *, days=92
                     raise ValueError("Station identity/location mismatch")
                 if not meta.get("licenses") or any(lic.get("name") not in ("ODC-BY", "US Public Domain", "CC BY 4.0") for lic in meta["licenses"]):
                     raise ValueError("Station reuse licence is not declared")
-                start = requested_end - timedelta(days=days)
+                start = requested_start or requested_end - timedelta(days=days)
                 if not force and end is None and state and state.window_end:
                     start = max(start, aware_utc(state.window_end) - timedelta(hours=72))
                 provider = (meta.get("provider") or {}).get("name") or "OpenAQ"

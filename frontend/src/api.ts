@@ -10,10 +10,11 @@ import type {
   WeatherData,
   WeatherModelComparison,
 } from './types'
+import { cachedResponse, peekResponse, invalidateCity } from './responseCache'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '/api/v1'
 
-async function request<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
+async function fetchRequest<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -32,9 +33,18 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 30_000):
   }
 }
 
+function request<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
+  if (init?.method === 'POST') return fetchRequest(path, init, timeoutMs)
+  const ttl = path.startsWith('/sync/status') || path.startsWith('/forecast') ? 10_000 : 5 * 60_000
+  return cachedResponse(path, () => fetchRequest<T>(path, init, timeoutMs), ttl)
+}
+
 const datasetQuery = (source: string, station?: number) => `&source=${source}${source === 'sensor' && station ? `&station_id=${station}` : ''}`
 
 export const api = {
+  peek: peekResponse,
+  invalidate: invalidateCity,
+  progress: (location: string) => request<{location: string; status: string; stage_days: number; completed_at: string | null; revision: string; failed_sources: string[]; note: string}>(`/sync/status?location=${location}`),
   stations: (location: string) => request<SensorStation[]>(`/sensors/stations?location=${encodeURIComponent(location)}`),
   locations: () => request<Location[]>('/locations'),
   dashboard: (location: string, hours: number) =>

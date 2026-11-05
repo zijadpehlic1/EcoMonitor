@@ -1,0 +1,199 @@
+{
+  "measured_at": "2026-11-05T22:48:52.086194+00:00",
+  "measurements": [
+    {
+      "city": "zenica",
+      "endpoint": "/dashboard",
+      "median_ms": 19.55,
+      "samples_ms": [
+        19.26,
+        22.52,
+        19.55
+      ],
+      "response_bytes": 8368,
+      "status": null
+    },
+    {
+      "city": "zenica",
+      "endpoint": "/history",
+      "median_ms": 21.67,
+      "samples_ms": [
+        21.67,
+        17.85,
+        25.44
+      ],
+      "response_bytes": 13740,
+      "status": null
+    },
+    {
+      "city": "zenica",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 8.36,
+      "samples_ms": [
+        8.36,
+        9.24,
+        7.72
+      ],
+      "response_bytes": 471,
+      "status": "pending"
+    },
+    {
+      "city": "zenica",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 8.08,
+      "samples_ms": [
+        8.63,
+        6.81,
+        8.08
+      ],
+      "response_bytes": 732,
+      "status": "pending"
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/dashboard",
+      "median_ms": 56.99,
+      "samples_ms": [
+        24.35,
+        57.4,
+        56.99
+      ],
+      "response_bytes": 8378,
+      "status": null
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/history",
+      "median_ms": 17.47,
+      "samples_ms": [
+        20.61,
+        14.23,
+        17.47
+      ],
+      "response_bytes": 13500,
+      "status": null
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 8.47,
+      "samples_ms": [
+        8.69,
+        8.47,
+        7.05
+      ],
+      "response_bytes": 439,
+      "status": "pending"
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 6.88,
+      "samples_ms": [
+        7.21,
+        6.88,
+        5.91
+      ],
+      "response_bytes": 700,
+      "status": "pending"
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/dashboard",
+      "median_ms": 8.19,
+      "samples_ms": [
+        18.6,
+        8.19,
+        7.88
+      ],
+      "response_bytes": 8367,
+      "status": null
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/history",
+      "median_ms": 12.3,
+      "samples_ms": [
+        11.98,
+        12.3,
+        12.4
+      ],
+      "response_bytes": 13717,
+      "status": null
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 5.88,
+      "samples_ms": [
+        5.88,
+        5.51,
+        5.99
+      ],
+      "response_bytes": 465,
+      "status": "pending"
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 6.82,
+      "samples_ms": [
+        5.8,
+        6.82,
+        7.05
+      ],
+      "response_bytes": 726,
+      "status": "pending"
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/dashboard",
+      "median_ms": 10.14,
+      "samples_ms": [
+        22.15,
+        9.72,
+        10.14
+      ],
+      "response_bytes": 8382,
+      "status": null
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/history",
+      "median_ms": 12.07,
+      "samples_ms": [
+        12.78,
+        12.07,
+        11.39
+      ],
+      "response_bytes": 13530,
+      "status": null
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 6.91,
+      "samples_ms": [
+        6.97,
+        6.08,
+        6.91
+      ],
+      "response_bytes": 451,
+      "status": "pending"
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 6.94,
+      "samples_ms": [
+        7.98,
+        6.25,
+        6.94
+      ],
+      "response_bytes": 712,
+      "status": "pending"
+    }
+  ],
+  "note": "Local sequential HTTP timings, 3 repetitions. Background workers may be active; not a load test.",
+  "overall_median_ms": 8.415
+}

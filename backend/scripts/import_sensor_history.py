@@ -19,6 +19,20 @@ args = parser.parse_args()
 Base.metadata.create_all(engine)
 with SessionLocal() as db:
     city = ensure_supported_locations(db)[args.city]
-    result = asyncio.run(synchronize_sensor_history(db, city, days=args.days,
-        force=args.force, end=_parse_iso(args.end) if args.end else None))
+    if args.end:
+        # Offline research replay; do not run concurrently with background imports.
+        from app.models import BackgroundJob
+        from app.services.air_quality import utc_now, aware_utc
+        leader = db.get(BackgroundJob, 'leader:sync')
+        if leader and leader.status == 'running' and aware_utc(leader.lease_until) > utc_now():
+            raise SystemExit('Stop the backend worker before an explicit historical replay.')
+        result = asyncio.run(synchronize_sensor_history(db, city, days=args.days,
+            force=args.force, end=_parse_iso(args.end)))
+    else:
+        from app.services.jobs import enqueue
+        if not 1 <= args.days <= 366:
+            raise SystemExit('days must be 1–366')
+        queued = enqueue(db, f'sync-history:{city.slug}', 'sync',
+            {'city':city.slug,'days':args.days,'physical_only':True}, -10)
+        result = {'status': 'queued' if queued else 'cached', 'message':'Start the backend to process the persistent queue.'}
     print(json.dumps(result, ensure_ascii=True))

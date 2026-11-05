@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     weather_history_days: int = 92
     weather_history_sync_hours: int = 24
     enable_background_sync: bool = True
+    ml_retrain_hours: int = 24
+    ml_min_new_samples: int = 24
+    sync_revision_hours: int = 48
+    unavailable_retry_days: int = 7
     request_timeout_seconds: float = 30.0
 
     model_config = SettingsConfigDict(

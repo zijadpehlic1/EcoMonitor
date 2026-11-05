@@ -40,7 +40,7 @@ def parse_fhmz_hour(row, pollutant, zone, start, end):
         return None
 
 
-async def synchronize_fhmz_history(db, location, *, days=92, force=False, end=None, settings):
+async def synchronize_fhmz_history(db, location, *, days=92, force=False, end=None, start=None, settings):
     configured = FHMZ_PRIMARY_STATIONS.get(location.slug)
     if not configured:
         return {'status': 'unavailable', 'message': 'Nema potvrđene FHMZ stanice.'}
@@ -57,7 +57,7 @@ async def synchronize_fhmz_history(db, location, *, days=92, force=False, end=No
         state = db.get(SensorImportState, station.id) if station else None
         if not force and not explicit_end and state and state.completed_at and utc_now() - aware_utc(state.completed_at) < timedelta(hours=24):
             return {'status': 'cached'}
-        start = end - timedelta(days=days)
+        start = aware_utc(start) if start else end - timedelta(days=days)
         if not force and not explicit_end and state and state.window_end:
             start = max(start, aware_utc(state.window_end) - timedelta(hours=72))
         zone = ZoneInfo(location.timezone)

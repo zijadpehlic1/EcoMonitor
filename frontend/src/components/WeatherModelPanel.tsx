@@ -8,7 +8,7 @@ type Props = {
 }
 
 export function WeatherModelPanel({ comparison, loading }: Props) {
-  if (loading && !comparison) {
+  if ((loading && !comparison) || comparison?.status === 'pending') {
     return <section className="card p-7 text-sm text-slate-500">Izračunavanje poređenja modela…</section>
   }
 
@@ -22,7 +22,7 @@ export function WeatherModelPanel({ comparison, loading }: Props) {
         <div>
           <p className="label">Mašinsko učenje</p>
           <h2 className="mt-1 font-display text-2xl font-bold">Utjecaj vremena na PM2.5 prognozu</h2>
-          {comparison && <p className="mt-2 text-xs text-slate-500">{comparison.provenance}</p>}
+          {comparison && <p className="mt-2 text-xs text-slate-500">{comparison.provenance} Izračunato: {formatDateTime(comparison.generated_at)}.</p>}
         </div>
         <div className="flex items-center gap-2 rounded-full bg-violet-50 px-3 py-2 text-xs font-bold text-violet-800">
           <BrainCircuit size={15} /> 24-satna walk-forward evaluacija

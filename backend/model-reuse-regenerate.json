@@ -1,0 +1,22 @@
+{
+  "city": "mostar",
+  "forecast_cache_invalidated": true,
+  "results": [
+    {
+      "model": "base",
+      "elapsed_ms": 739.04,
+      "fit_calls": 0,
+      "status": "ready",
+      "trained": false,
+      "forecast_recomputed": true
+    },
+    {
+      "model": "weather",
+      "elapsed_ms": 867.84,
+      "fit_calls": 0,
+      "status": "ready",
+      "trained": false,
+      "forecast_recomputed": true
+    }
+  ]
+}

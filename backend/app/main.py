@@ -19,38 +19,35 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
-async def background_sync_loop() -> None:
-    while True:
-        try:
-            with SessionLocal() as db:
-                for location in ensure_supported_locations(db).values():
-                    for sync in (synchronize_sensor_location, synchronize_location, synchronize_weather, synchronize_sensor_history):
-                        try:
-                            result = await sync(db, location)
-                            logger.info("%s for %s: %s", sync.__name__, location.slug,
-                                result.get("status") if isinstance(result, dict) else result.status)
-                        except Exception as exc:
-                            db.rollback()
-                            logger.warning("%s for %s failed: %s", sync.__name__, location.slug, type(exc).__name__)
-        except Exception:
-            logger.exception("Unexpected background synchronization failure")
-        await asyncio.sleep(max(settings.sync_interval_minutes, 5) * 60)
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    import os
+    import sys
+    import subprocess
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
         ensure_supported_locations(db)
-
-    task = None
+    workers = []
     if settings.enable_background_sync:
-        task = asyncio.create_task(background_sync_loop())
-    yield
-    if task:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        for kind in ('sync', 'ml'):
+            workers.append(await asyncio.create_subprocess_exec(sys.executable, '-m', 'app.worker', kind,
+                stdin=asyncio.subprocess.PIPE, env={**os.environ, 'ECOMONITOR_MANAGED_WORKER': '1'},
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0))
+    try:
+        yield
+    finally:
+        for worker in workers:
+            if worker.returncode is None:
+                worker.stdin.write(b'stop\n')
+                await worker.stdin.drain()
+        for worker in workers:
+            with suppress(ProcessLookupError):
+                try:
+                    await asyncio.wait_for(worker.wait(), timeout=30)
+                except TimeoutError:
+                    worker.terminate()
+                    await worker.wait()
+
 
 
 app = FastAPI(

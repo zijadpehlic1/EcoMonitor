@@ -100,6 +100,7 @@ class EvaluationMetrics(BaseModel):
 
 
 class MLForecastResponse(BaseModel):
+    computation_status: str = 'done'
     location: str = ""
     source_type: str = "modeled"
     station_id: int | None = None
@@ -174,6 +175,7 @@ class WeatherAwareForecastPoint(BaseModel):
 
 
 class WeatherModelComparisonResponse(BaseModel):
+    computation_status: str = 'done'
     location: str = ""
     source_type: str = "modeled"
     station_id: int | None = None
@@ -181,8 +183,8 @@ class WeatherModelComparisonResponse(BaseModel):
     by_horizon: dict[int, dict[str, float]] = Field(default_factory=dict)
     status: str
     message: str
-    comparison_is_fair: bool
-    limitation: str
+    comparison_is_fair: bool = False
+    limitation: str = ''
     evaluation_horizon_hours: int = 24
     aligned_samples: int = 0
     training_samples: int = 0

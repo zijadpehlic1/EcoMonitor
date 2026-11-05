@@ -1,0 +1,199 @@
+{
+  "measured_at": "2026-11-05T23:27:56.936825+00:00",
+  "measurements": [
+    {
+      "city": "zenica",
+      "endpoint": "/dashboard",
+      "median_ms": 9.09,
+      "samples_ms": [
+        17.75,
+        9.09,
+        7.36
+      ],
+      "response_bytes": 8370,
+      "status": null
+    },
+    {
+      "city": "zenica",
+      "endpoint": "/history",
+      "median_ms": 12.06,
+      "samples_ms": [
+        28.25,
+        12.06,
+        10.45
+      ],
+      "response_bytes": 13780,
+      "status": null
+    },
+    {
+      "city": "zenica",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 6.89,
+      "samples_ms": [
+        10.21,
+        6.15,
+        6.89
+      ],
+      "response_bytes": 4624,
+      "status": "ready"
+    },
+    {
+      "city": "zenica",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 6.77,
+      "samples_ms": [
+        6.77,
+        6.5,
+        6.84
+      ],
+      "response_bytes": 6925,
+      "status": "ready"
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/dashboard",
+      "median_ms": 10.54,
+      "samples_ms": [
+        24.99,
+        10.54,
+        9.6
+      ],
+      "response_bytes": 8378,
+      "status": null
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/history",
+      "median_ms": 10.04,
+      "samples_ms": [
+        10.67,
+        10.04,
+        8.56
+      ],
+      "response_bytes": 13500,
+      "status": null
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 7.37,
+      "samples_ms": [
+        11.21,
+        6.53,
+        7.37
+      ],
+      "response_bytes": 4563,
+      "status": "ready"
+    },
+    {
+      "city": "sarajevo",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 6.44,
+      "samples_ms": [
+        8.9,
+        6.44,
+        6.05
+      ],
+      "response_bytes": 6849,
+      "status": "ready"
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/dashboard",
+      "median_ms": 8.82,
+      "samples_ms": [
+        9.36,
+        8.82,
+        7.41
+      ],
+      "response_bytes": 8367,
+      "status": null
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/history",
+      "median_ms": 13.78,
+      "samples_ms": [
+        18.66,
+        13.78,
+        10.81
+      ],
+      "response_bytes": 13784,
+      "status": null
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 6.39,
+      "samples_ms": [
+        8.34,
+        6.39,
+        5.58
+      ],
+      "response_bytes": 4520,
+      "status": "ready"
+    },
+    {
+      "city": "mostar",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 6.27,
+      "samples_ms": [
+        9.1,
+        6.27,
+        6.11
+      ],
+      "response_bytes": 6795,
+      "status": "ready"
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/dashboard",
+      "median_ms": 9.11,
+      "samples_ms": [
+        33.57,
+        9.11,
+        8.53
+      ],
+      "response_bytes": 8383,
+      "status": null
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/history",
+      "median_ms": 10.41,
+      "samples_ms": [
+        10.85,
+        10.41,
+        10.11
+      ],
+      "response_bytes": 13530,
+      "status": null
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/forecast/pm25",
+      "median_ms": 7.18,
+      "samples_ms": [
+        9.52,
+        7.18,
+        5.98
+      ],
+      "response_bytes": 3319,
+      "status": "comparison_ready_forecast_unavailable"
+    },
+    {
+      "city": "banja-luka",
+      "endpoint": "/forecast/pm25/weather-comparison",
+      "median_ms": 6.19,
+      "samples_ms": [
+        9.61,
+        6.19,
+        6.17
+      ],
+      "response_bytes": 5690,
+      "status": "comparison_ready_forecast_unavailable"
+    }
+  ],
+  "note": "Local sequential HTTP timings, 3 repetitions. Background workers may be active; not a load test.",
+  "overall_median_ms": 8.095
+}

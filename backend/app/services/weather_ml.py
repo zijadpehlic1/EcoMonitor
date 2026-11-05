@@ -52,7 +52,7 @@ def _model() -> RandomForestRegressor:
         max_depth=12,
         min_samples_leaf=3,
         random_state=42,
-        n_jobs=-1,
+        n_jobs=1,
     )
 
 
@@ -182,6 +182,13 @@ def _generate(db, location, horizon, source, station_id):
     if cached is not None:
         return cached
 
+    from app.services import model_store
+    artifact_key = model_store.artifact_key(location, source, station_id, 'weather')
+    training_data = model_store.snapshot(timestamps, values, archived_weather)
+    saved = model_store.reusable(db, artifact_key, training_data, WeatherModelComparisonResponse)
+    if saved:
+        return model_store.weather_prediction(*saved, values, timestamps, future_rows, horizon)
+
     base_features: list[list[float]] = []
     weather_features: list[list[float]] = []
     targets: list[float] = []
@@ -284,7 +291,7 @@ def _generate(db, location, horizon, source, station_id):
     persistence_mae, persistence_rmse = _error_metrics(actuals_all, persistence_all)
     change = ((base_mae - weather_mae) / base_mae * 100) if base_mae else 0.0
 
-    weather_model.n_jobs = -1
+    weather_model.n_jobs = 1
     weather_model.fit(x_weather, y)
     weather_model.n_jobs = 1
     recursive_history = values.copy()
@@ -354,6 +361,7 @@ def _generate(db, location, horizon, source, station_id):
         forecast=forecast,
         generated_at=datetime.now(UTC),
     )
+    model_store.save(db, artifact_key, training_data, weather_model, response)
     with _cache_lock:
         if len(_cache) >= 16:
             _cache.pop(next(iter(_cache)))
