@@ -21,7 +21,7 @@ import {
 import { api } from './api'
 import { matchesDataset } from './datasetIdentity'
 import { ProvenancePanel } from './components/ProvenancePanel'
-import { aqiBand } from './aqi'
+import { heroStatus } from './heroStatus'
 import { AirQualityChart, historyControlLabels } from './components/AirQualityChart'
 import { ForecastPanel } from './components/ForecastPanel'
 import { LoadingState } from './components/LoadingState'
@@ -86,7 +86,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
     (source === 'modeled' || historyData.pollution_source.station_id === String(stationId)) ? historyData : null
   const forecast = matchesDataset(forecastData, location, source, stationId) ? forecastData : null
   const weatherComparison = matchesDataset(comparisonData, location, source, stationId) ? comparisonData : null
-  const [sensor, setSensor] = useState<SensorData | null>(() => api.peek(`/sensors/current?location=${location}`))
+  const [sensor, setSensor] = useState<SensorData | null>(() => api.peek(`/sensors/current?location=${location}${stationId ? `&station_id=${stationId}` : ''}`))
   const [loading, setLoading] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -176,17 +176,18 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
   const loadSensor = useCallback(async (_allowRefresh = false) => {
     setSensorLoading(true)
     try {
-      const result = await api.sensors(location)
-      setSensor(result)
       const available = await api.stations(location)
       setStations(available)
       setStationId(previous => previous ?? available[0]?.id)
+      const selected = stationId ?? available[0]?.id
+      const result = await api.sensors(location, selected)
+      setSensor(result)
     } catch {
       // Preserve this city's previously fetched values on a transient failure.
     } finally {
       setSensorLoading(false)
     }
-  }, [location])
+  }, [location, stationId])
 
   useEffect(() => {
     api.locations().then(setLocations).catch(() => setLocations([]))
@@ -277,11 +278,11 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
     return () => { active = false; window.clearInterval(timer) }
   }, [location, loadDashboard, loadHistory, loadWeather, loadSensor, loadForecast, loadWeatherComparison])
 
-  const latest = dashboard?.latest ?? null
-  const fresh = latest && Date.now() - new Date(latest.measured_at).getTime() <= 3 * 3600_000
-  const currentAqi = fresh ? latest?.european_aqi : null
-  const band = aqiBand(currentAqi)
-  const aqiKnown = band.label !== 'Nedostupno'
+  const latest = dashboard?.latest && new Date(dashboard.latest.measured_at).getTime() <= Date.now() ? dashboard.latest : null
+  const status = heroStatus(source, location, stations.find(s => s.id === stationId), sensor, dashboard)
+  const currentAqi = status.value
+  const band = status.band
+  const aqiKnown = status.known
   const averages = useMemo(() => {
     if (!history?.points.length) return null
     const valid = history.points.map((item) => item.pm2_5).filter((value): value is number => value != null)
@@ -306,7 +307,7 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
 
           <div className="flex flex-1 items-center justify-end gap-2 sm:flex-none">
             <div className="hidden items-center gap-2 rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 sm:flex">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" /> {sensor?.is_live ? 'Stvarna mjerenja dostupna' : 'Modelirani podaci'}
+              <span className="h-2 w-2 rounded-full bg-emerald-500" /> {status.badge}
             </div>
             <label className="relative flex items-center">
               <MapPin size={16} className="pointer-events-none absolute left-3 text-slate-500" />
@@ -363,26 +364,27 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
                     Kvalitet zraka: <span className="text-lime">{dashboard?.location.name ?? locations.find(l => l.slug === location)?.name ?? location}</span>, prikazan razumljivo.
                   </h1>
                   <p className="mt-4 max-w-2xl text-sm leading-6 text-emerald-50/70">
-                    Satne atmosferske procjene, transparentno porijeklo podataka i PM2.5 prognoza bez curenja podataka — na jednom mjestu.
+                    {source === 'sensor' ? 'Mjerenja odabrane fizičke stanice i jasno odvojene regionalne procjene — na jednom mjestu.' : 'Satne atmosferske procjene, transparentno porijeklo podataka i PM2.5 prognoza bez curenja podataka — na jednom mjestu.'}
                   </p>
                 </div>
                 <span className="rounded-full border border-white/15 bg-white/10 px-3 py-2 text-xs font-semibold backdrop-blur">
-                  {latest ? fresh ? 'Podaci dostupni' : 'Podaci su zastarjeli' : 'Čeka se prva sinhronizacija'}
+                  {status.badge}
                 </span>
               </div>
 
               <div className="flex flex-col gap-7 sm:flex-row sm:items-end sm:justify-between">
                 <div className="flex items-center gap-5">
-                  <AqiGauge value={aqiKnown ? currentAqi ?? null : null} color={band.color} />
+                  <AqiGauge value={aqiKnown ? currentAqi ?? null : null} color={band.color} source={source} />
                   <div>
-                    <p className="text-sm text-emerald-50/65">Evropski AQI · CAMS</p>
-                    <p className="mt-1 font-display text-3xl font-extrabold">{band.label}</p>
-                    <p className="mt-2 max-w-sm text-sm leading-5 text-emerald-50/65">{band.text}</p>
+                    <p className="text-sm text-emerald-50/65">{status.label}</p>
+                    <p className="mt-1 font-display text-3xl font-extrabold">{status.categoryLabel}</p>
+                    <p className="mt-2 max-w-sm text-sm leading-5 text-emerald-50/65">{status.guidance}</p>
+                    {status.secondary && <p className="mt-2 max-w-sm text-xs leading-5 text-emerald-50/65">{status.secondary}</p>}
                   </div>
                 </div>
                 <div className="border-t border-white/10 pt-4 text-xs leading-5 text-emerald-50/60 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
-                  <div className="font-semibold text-white">Posljednja modelirana vrijednost</div>
-                  <div>{formatUpdated(latest?.measured_at ?? null)}</div>
+                  <div className="font-semibold text-white">{status.timestampLabel}</div>
+                  <div>{formatUpdated(status.timestamp)}{status.timestamp ? ' · Europe/Sarajevo' : ''}</div>
                 </div>
               </div>
             </div>
@@ -400,19 +402,19 @@ function CityDashboard({ location, setLocation }: { location: string; setLocatio
             </div>
             <div className="my-6 h-px bg-slate-100" />
             <div className="space-y-5">
-              <SignalRow label="Aktivnosti na otvorenom" value={aqiKnown ? (currentAqi! > 60 ? 'Smanjiti' : 'Uobičajeno') : 'Nepoznato'} good={aqiKnown && currentAqi! <= 60} neutral={!aqiKnown} />
-              <SignalRow label="Osjetljive grupe" value={aqiKnown ? (currentAqi! > 40 ? 'Potreban oprez' : 'Nizak rizik') : 'Nepoznato'} good={aqiKnown && currentAqi! <= 40} neutral={!aqiKnown} />
-              <SignalRow label="Vrsta podataka" value="Modelirana procjena · CAMS" neutral />
+                  <SignalRow label="Aktivnosti na otvorenom" value={status.healthGeneral} good={status.guidanceAvailable && (source === 'sensor' ? currentAqi! <= 3 : currentAqi! <= 60)} neutral={!status.guidanceAvailable} />
+                  <SignalRow label="Osjetljive grupe" value={status.healthSensitive} good={status.guidanceAvailable && (source === 'sensor' ? currentAqi! <= 2 : currentAqi! <= 40)} neutral={!status.guidanceAvailable} />
+              <SignalRow label="Vrsta podataka" value={status.dataType} neutral />
             </div>
             <div className="mt-auto pt-7">
               <div className="rounded-2xl bg-slate-50 p-4 text-xs leading-5 text-slate-600">
-                <span className="font-semibold text-slate-800">Važno:</span> Ovo su opće informacije, a ne medicinski savjet. Stvarna mjerenja lokalnih senzora mogu se razlikovati od regionalne procjene CAMS mrežne ćelije.
+                <span className="font-semibold text-slate-800">Važno:</span> {source === 'sensor' ? status.guidanceAvailable ? `Opća populacija: ${sensor?.health_general} Osjetljive grupe: ${sensor?.health_sensitive} Automatska mjerenja nisu konačno validirana. CAMS je zaseban regionalni pokazatelj.` : 'Nepotpuni ili zastarjeli podaci ne opravdavaju umirujuće preporuke. CAMS je zaseban regionalni pokazatelj.' : 'Ovo su opće informacije, a ne medicinski savjet. Stvarna mjerenja lokalnih senzora mogu se razlikovati od regionalne procjene CAMS mrežne ćelije.'}
               </div>
             </div>
           </aside>
         </section>
 
-        <SensorPanel sensor={sensor} loading={sensorLoading} />
+        <SensorPanel sensor={sensor?.station_id === stationId ? sensor : null} loading={sensorLoading} />
 
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5" aria-label="Najnovije modelirane vrijednosti zagađujućih materija">
           {pollutantMeta.map(({ key, label, detail, icon: Icon, accent }) => (
@@ -554,18 +556,18 @@ function valueOf(reading: Reading | null, key: keyof Reading) {
   return typeof value === 'number' ? formatNumber(value) : '—'
 }
 
-function AqiGauge({ value, color }: { value: number | null; color: string }) {
+function AqiGauge({ value, color, source }: { value: number | null; color: string; source: 'sensor' | 'modeled' }) {
   const display = value == null ? '—' : formatInteger(Math.round(value))
-  const progress = Math.min(100, Math.max(0, value ?? 0)) * 3.6
+  const progress = source === 'sensor' ? Math.min(6, Math.max(0, value ?? 0)) * 60 : Math.min(100, Math.max(0, value ?? 0)) * 3.6
   return (
     <div
       className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full"
       style={{ background: `conic-gradient(${color} ${progress}deg, rgba(255,255,255,.12) ${progress}deg)` }}
-      aria-label={`Evropski AQI ${display}`}
+      aria-label={source === 'sensor' ? `FHMZ/EEA kategorija stanice ${display} od 6` : `Evropski AQI CAMS ${display}`}
     >
       <div className="flex h-[84px] w-[84px] flex-col items-center justify-center rounded-full bg-[#173c2d]">
         <span className="font-display text-3xl font-extrabold">{display}</span>
-        <span className="text-[0.6rem] font-bold uppercase tracking-widest text-emerald-100/60">EAQI</span>
+        <span className="text-[0.6rem] font-bold uppercase tracking-widest text-emerald-100/60">{source === 'sensor' ? 'od 6' : 'EAQI'}</span>
       </div>
     </div>
   )

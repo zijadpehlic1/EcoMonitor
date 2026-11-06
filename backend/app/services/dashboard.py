@@ -70,6 +70,10 @@ def build_dashboard(db: Session, location: Location, hours: int) -> DashboardRes
         .order_by(AirQualityReading.measured_at.desc())
         .limit(1)
     )
+    # A stored future hour may later be revised; valid time, not the old
+    # is_forecast flag, determines whether it can be called current.
+    if latest and aware_utc(latest.measured_at) > now:
+        latest = None
 
     last_sync = get_last_successful_sync(db, location.id)
     metadata = db.get(SourceMetadata, f'{location.id}:{SOURCE_NAME}')

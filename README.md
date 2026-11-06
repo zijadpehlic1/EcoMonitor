@@ -1,5 +1,7 @@
 # EcoMonitor
 
+The selected physical station now has a provisional **FHMZ/EEA six-level hourly air-quality category** derived from one valid station/hour, using the published pollutant limits, worst-pollutant rule and station-type completeness checks. Automatic, not finally validated data is allowed and labeled provisional. Incomplete low/moderate snapshots receive no reassuring category; severe incomplete levels are flagged. Historical categories retain their timestamp and age and do not drive today's health advice. OpenAQ station type is treated as unknown unless verified, so conservative completeness applies. CAMS remains a separate regional modeled AQI. Methodology and actual station availability are recorded in [AUDIT.md](AUDIT.md).
+
 EcoMonitor is a working academic environmental monitoring application for **“Primjena informacionih tehnologija u zaštiti okoliša”**. It supports Zenica, Sarajevo, Mostar and Banja Luka, with separate physical measurements, CAMS estimates, weather and station-specific PM2.5 forecasts. It is a thesis prototype, not a validated public-health or production monitoring service. See the dated audit for tested scope and limitations.
 
 > **Data integrity:** Open-Meteo air-quality values come from CAMS atmospheric models. They are regional modeled estimates—not measurements from a physical sensor in Zenica. EcoMonitor preserves this distinction throughout the database, API, and user interface and never invents missing measurements.

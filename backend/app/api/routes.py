@@ -216,9 +216,10 @@ async def sensor_history_refresh(location: str = "zenica", days: int = Query(def
 @router.get("/sensors/current", response_model=SensorCurrentResponse)
 def sensor_current(
     location: str = "zenica",
+    station_id: int | None = None,
     db: Session = Depends(get_db),
 ) -> SensorCurrentResponse:
-    return build_sensor_current(db, resolve_location(db, location))
+    return build_sensor_current(db, resolve_location(db, location), station_id=station_id)
 
 
 @router.get("/sensors/coverage", response_model=list[SensorCoverageOut])

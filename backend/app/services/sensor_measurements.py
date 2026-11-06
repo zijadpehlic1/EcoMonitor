@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -9,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.models import Location, SensorMeasurement, SensorStation, SyncRun
+from app.models import Location, SensorMeasurement, SensorStation, SensorImportState, SyncRun
 from app.schemas import (
     LocationOut,
     SensorCoverageOut,
@@ -400,11 +401,16 @@ def build_sensor_current(
     db: Session,
     location: Location,
     settings: Settings | None = None,
+    station_id: int | None = None,
 ) -> SensorCurrentResponse:
     settings = settings or get_settings()
+    if station_id is not None:
+        from app.services.datasets import resolve_station
+        resolve_station(db, location, station_id)
     station = db.scalar(
         select(SensorStation)
-        .where(SensorStation.location_id == location.id, SensorStation.active.is_(True))
+        .where(SensorStation.location_id == location.id, SensorStation.active.is_(True),
+               *((SensorStation.id == station_id,) if station_id is not None else ()))
         .order_by(SensorStation.last_measurement_at.desc())
         .limit(1)
     )
@@ -421,33 +427,39 @@ def build_sensor_current(
             disclaimer=disclaimer,
         )
 
-    latest_by_pollutant = (
-        select(
-            SensorMeasurement.pollutant,
-            func.max(SensorMeasurement.measured_at).label("latest_at"),
-        )
-        .where(SensorMeasurement.station_id == station.id)
-        .group_by(SensorMeasurement.pollutant)
-        .subquery()
-    )
-    rows = db.scalars(
-        select(SensorMeasurement).join(
-            latest_by_pollutant,
-            (SensorMeasurement.pollutant == latest_by_pollutant.c.pollutant)
-            & (SensorMeasurement.measured_at == latest_by_pollutant.c.latest_at),
-        )
-        .where(SensorMeasurement.station_id == station.id)
-        .order_by(SensorMeasurement.pollutant)
-    ).all()
-    latest_at = aware_utc(station.last_measurement_at)
-    age_minutes = (utc_now() - latest_at).total_seconds() / 60
-    fresh_rows = [row for row in rows if _is_fresh(aware_utc(row.measured_at), settings)
-        and row.validation_status == "unvalidated" and isfinite(row.value) and row.value >= 0 and row.unit == UNIT]
-    is_live = station.is_reference and bool(fresh_rows) and _is_fresh(latest_at, settings)
+    from app.services.station_aqi import LIMITS, GENERAL, SENSITIVE, classify, freshness
+    now = utc_now()
+    state = db.get(SensorImportState, station.id)
+    metadata = json.loads(state.metadata_json) if state else {}
+    station_type = metadata.get('stationClassification') or metadata.get('station_type')
+    # Review recent distinct valid hours in one indexed database query. Prefer
+    # the newest reportable category; a later incomplete low hour must not be
+    # silently combined with earlier pollutants to make a reassuring index.
+    candidates = db.scalars(select(SensorMeasurement).where(
+        SensorMeasurement.station_id == station.id,
+        SensorMeasurement.measured_at <= now,
+        SensorMeasurement.pollutant.in_(LIMITS), SensorMeasurement.unit == UNIT,
+        SensorMeasurement.validation_status.in_(('unvalidated', 'validated')))
+        .order_by(SensorMeasurement.measured_at.desc()).limit(2000)).all()
+    by_hour = {}
+    for row in candidates:
+        if isfinite(row.value) and row.value >= 0:
+            by_hour.setdefault(aware_utc(row.measured_at), []).append(row)
+    latest_at = next(iter(by_hour), None)
+    for stamp, hour_rows in by_hour.items():
+        if classify(hour_rows, station_type).level is not None:
+            latest_at = stamp
+            break
+    valid_rows = by_hour.get(latest_at, [])
+    category = classify(valid_rows, station_type)
+    freshness_state, age_minutes = freshness(latest_at, now, now.astimezone(ZoneInfo('Europe/Sarajevo')))
+    is_live = station.is_reference and bool(valid_rows) and freshness_state in ('current', 'recent')
+    guidance_allowed = is_live and category.level is not None and category.complete
     return SensorCurrentResponse(
         status="live" if is_live else "stale",
         is_live=is_live,
         location=LocationOut.model_validate(location),
+        station_id=station.id,
         station_name=station.name,
         provider=station.provider,
         source_url=station.source_url,
@@ -458,17 +470,27 @@ def build_sensor_current(
                 unit=row.unit,
                 measured_at=aware_utc(row.measured_at),
             )
-            for row in fresh_rows
+            for row in valid_rows
         ],
         latest_measurement_at=latest_at,
-        freshness_minutes=round(age_minutes, 1),
-        validation_status="unvalidated",
+        freshness_minutes=age_minutes,
+        validation_status="unvalidated" if any(r.validation_status == 'unvalidated' for r in valid_rows) else 'validated' if valid_rows else None,
         message=(
             "Dostupna su svježa fizička mjerenja."
             if is_live
             else "Pohranjena mjerenja postoje, ali njihova svježina nije potvrđena."
         ),
         disclaimer=disclaimer,
+        aqi_category=category.level,
+        aqi_label=category.label,
+        aqi_complete=category.complete,
+        aqi_limiting_pollutant=category.limiting_pollutant,
+        aqi_station_type=station_type,
+        aqi_freshness=freshness_state,
+        aqi_age_minutes=age_minutes,
+        health_general=GENERAL[category.level-1] if guidance_allowed else None,
+        health_sensitive=SENSITIVE[category.level-1] if guidance_allowed else None,
+        aqi_methodology='FHMZ/EEA, satni pragovi; izvedeno iz pohranjenih mjerenja' if category.level else None,
     )
 
 

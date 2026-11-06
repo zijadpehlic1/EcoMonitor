@@ -32,7 +32,7 @@ export function ProvenancePanel({city, source, stationId, stations, dashboard}: 
       {' '}Validacija: {Object.entries(station.validation_counts ?? {}).map(([key,count]) => `${({unvalidated:'automatski, nevalidirani',provider_flagged:'označeni kod pružaoca',incomplete_hour:'nepotpuni sati',validated:'validirani'} as Record<string,string>)[key] ?? 'drugi status'}: ${formatInteger(count)}`).join('; ') || 'Status nije dostupan'}.
       <span className="block">{station.attribution.replace('upstream provider:', 'izvorni pružalac:')}</span>
     </p>}
-    <p className="mt-4 text-xs leading-5 text-slate-500">AQI, zdravstvene preporuke i kartice označene „modelirano“ koriste CAMS. Temperatura na grafikonu i meteorološki panel koriste modelirane Open-Meteo podatke; to nisu mjerenja odabrane fizičke stanice. ML prognoza je izračun modela, a ne mjerenje.</p>
+    <p className="mt-4 text-xs leading-5 text-slate-500">{physical ? 'Glavna satna kategorija je privremeno izvedena iz mjerenja odabrane stanice prema objavljenim evropskim pragovima i pravilima potpunosti. Odvojeni regionalni AQI i kartice označene „modelirano“ koriste CAMS.' : 'Glavni AQI, zdravstvene preporuke i kartice označene „modelirano“ koriste CAMS.'} Temperatura na grafikonu i meteorološki panel koriste modelirane Open-Meteo podatke; to nisu mjerenja odabrane fizičke stanice. ML prognoza je izračun modela, a ne mjerenje.</p>
     {url && <a href={url} target="_blank" rel="noreferrer" className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-moss hover:underline">Pregledaj metodologiju izvora <ExternalLink size={15}/></a>}
   </article>
 }

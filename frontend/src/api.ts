@@ -63,8 +63,8 @@ export const api = {
       undefined,
       120_000,
     ),
-  sensors: (location: string) =>
-    request<SensorData>(`/sensors/current?location=${encodeURIComponent(location)}`),
+  sensors: (location: string, station?: number) =>
+    request<SensorData>(`/sensors/current?location=${encodeURIComponent(location)}${station ? `&station_id=${station}` : ''}`),
   refresh: (location: string, force = false) =>
     request<{ status: string; message: string }>(
       `/refresh?location=${encodeURIComponent(location)}&force=${force}`,

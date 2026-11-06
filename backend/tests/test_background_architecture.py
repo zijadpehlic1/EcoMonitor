@@ -196,6 +196,13 @@ def test_station_catalog_counts_and_quality_are_station_specific():
     result=sensor_stations(city.slug,db)
     assert {r['name']:r['measurement_count'] for r in result}=={'Brist':1,'Other station':2}
     assert all(r['location']==city.slug and r['validation_counts']['unvalidated']==r['measurement_count'] for r in result)
+    from app.services.sensor_measurements import build_sensor_current
+    stations = {r['name']:r['id'] for r in result}
+    selected = build_sensor_current(db,city,station_id=stations['Brist'])
+    assert selected.station_id == stations['Brist'] and selected.station_name == 'Brist'
+    assert selected.measurements[0].value == 12.
+    other = build_sensor_current(db,city,station_id=stations['Other station'])
+    assert other.station_id == stations['Other station'] and other.measurements[0].value == 23.
 
 
 def test_reused_evaluation_forecast_status_tracks_current_inputs():

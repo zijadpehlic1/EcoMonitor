@@ -1,7 +1,7 @@
 type Entry = { value: unknown; saved: number }
 const entries = new Map<string, Entry>()
 const flights = new Map<string, Promise<unknown>>()
-const prefix = 'ecomonitor:v2:'
+const prefix = 'ecomonitor:v3:'
 
 export function peekResponse<T>(key: string): T | null {
   let entry = entries.get(key)

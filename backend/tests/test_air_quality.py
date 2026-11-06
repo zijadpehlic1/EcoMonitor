@@ -102,6 +102,12 @@ def test_ingestion_normalizes_utc_and_separates_forecast_by_valid_time(monkeypat
     assert [air_quality.aware_utc(item.measured_at) for item in readings] == times
     assert all(item.source_type == "modeled" for item in readings)
 
+    from app.services import dashboard as dashboard_service
+    monkeypatch.setattr(dashboard_service, 'utc_now', lambda: now)
+    current = dashboard_service.build_dashboard(db, location, 24)
+    assert current.latest.measured_at == times[1]
+    assert all(item.measured_at <= now for item in current.history)
+
 
 def test_ingestion_rejects_unexpected_concentration_units() -> None:
     db = make_db()

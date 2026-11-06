@@ -214,6 +214,7 @@ class SensorCurrentResponse(BaseModel):
     status: str
     is_live: bool
     location: LocationOut
+    station_id: int | None = None
     station_name: str | None = None
     provider: str | None = None
     source_url: str | None = None
@@ -223,6 +224,16 @@ class SensorCurrentResponse(BaseModel):
     validation_status: str | None = None
     message: str
     disclaimer: str
+    aqi_category: int | None = None
+    aqi_label: str | None = None
+    aqi_complete: bool = False
+    aqi_limiting_pollutant: str | None = None
+    aqi_station_type: str | None = None
+    aqi_freshness: str = 'unavailable'
+    aqi_age_minutes: int | None = None
+    health_general: str | None = None
+    health_sensitive: str | None = None
+    aqi_methodology: str | None = None
 
 
 class SensorCoverageOut(BaseModel):

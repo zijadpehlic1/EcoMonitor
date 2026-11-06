@@ -24,6 +24,7 @@ export function SensorPanel({ sensor, loading }: { sensor: SensorData | null; lo
           <p className="mt-1 text-sm leading-6 text-slate-600">
             {sensor?.message ?? 'Lokalni izvor mjerenja trenutno nije dostupan.'} Modelirani podaci ostaju prikazani odvojeno.
           </p>
+          {sensor?.latest_measurement_at && <p className="mt-1 text-xs text-slate-500">Posljednji valjan sat: {formatDateTime(sensor.latest_measurement_at)} · Europe/Sarajevo. Historijski podaci nisu trenutni uslovi.</p>}
         </div>
       </section>
     )

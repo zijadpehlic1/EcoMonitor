@@ -192,6 +192,7 @@ export type SensorData = {
   status: 'live' | 'stale' | 'unavailable'
   is_live: boolean
   location: Location
+  station_id: number | null
   station_name: string | null
   provider: string | null
   source_url: string | null
@@ -206,5 +207,15 @@ export type SensorData = {
   validation_status: string | null
   message: string
   disclaimer: string
+  aqi_category: number | null
+  aqi_label: string | null
+  aqi_complete: boolean
+  aqi_limiting_pollutant: string | null
+  aqi_station_type: string | null
+  aqi_freshness: 'current' | 'recent' | 'stale' | 'unavailable'
+  aqi_age_minutes: number | null
+  health_general: string | null
+  health_sensitive: string | null
+  aqi_methodology: string | null
 }
 
